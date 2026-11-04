@@ -1,4 +1,6 @@
-name: Build Windows app
+# Builds and tests the Windows and Mac apps, then publishes both in one release.
+# (The file keeps its old name so release numbers keep counting up for the updater.)
+name: Build apps
 
 on:
   push:
@@ -7,6 +9,7 @@ on:
   workflow_dispatch:
 
 env:
+  APP_VERSION: 1.0.${{ github.run_number }}
   PYI_ARGS: >-
     --noconfirm --onefile --paths .
     --collect-submodules pyicloud
@@ -17,13 +20,9 @@ env:
     --copy-metadata keyring
 
 jobs:
-  build:
+  windows:
     runs-on: windows-latest
     timeout-minutes: 20
-    permissions:
-      contents: write  # to publish the release the app updates from
-    env:
-      APP_VERSION: 1.0.${{ github.run_number }}
     steps:
       - uses: actions/checkout@v4
 
@@ -96,17 +95,6 @@ jobs:
           Get-Content selftest\report.txt
           if ($p.ExitCode -ne 0) { throw "Self-test failed with exit code $($p.ExitCode)" }
 
-      # The app checks the latest release for updates, so publish only builds that passed.
-      - name: Publish release
-        if: github.ref == 'refs/heads/main'
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          $notes = "Built from ${{ github.sha }}.`n`nDownload **HideMyEmail-Setup.exe** below. Installed apps update themselves."
-          gh release create "v$env:APP_VERSION" dist/HideMyEmail-Setup.exe --title "Hide My Email $env:APP_VERSION" --notes $notes --latest
-          if ($LASTEXITCODE -ne 0) { throw "Publishing the release failed" }
-
       # A windowed .exe can't print startup errors, so on failure rebuild as a
       # console app and run it to show what went wrong.
       - name: Diagnose with a console build
@@ -125,3 +113,73 @@ jobs:
         with:
           name: selftest
           path: selftest/
+
+  mac:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt pyinstaller
+
+      - name: Build app and disk image
+        run: PYTHON=python ./app/build.sh --standalone --dmg
+
+      - name: Test the bundled helper
+        run: |
+          printf '{"id":1,"cmd":"status"}\n{"id":2,"cmd":"bogus"}\n' \
+            | "app/Hide My Email.app/Contents/Resources/hme-helper/hme-helper" | tee helper-out.txt
+          grep -q '"id": 1, "ok": true' helper-out.txt
+          grep -q "Unknown command" helper-out.txt
+
+      - name: Install from the disk image and launch
+        run: |
+          hdiutil attach "app/Hide My Email.dmg" -nobrowse -mountpoint /tmp/hme
+          test -d "/tmp/hme/Hide My Email.app" && test -L /tmp/hme/Applications
+          cp -R "/tmp/hme/Hide My Email.app" /Applications/
+          hdiutil detach /tmp/hme
+          codesign --verify "/Applications/Hide My Email.app"
+          open "/Applications/Hide My Email.app"
+          sleep 15
+          pgrep -fl "Hide My Email.app/Contents/MacOS/HideMyEmail"
+          pgrep -fl "hme-helper/hme-helper"
+          cat "$HOME/Library/Application Support/hme/helper.log"
+          pkill -f "Hide My Email.app/Contents/MacOS/HideMyEmail" || true
+
+      - name: Name the download
+        run: mkdir -p dist && mv "app/Hide My Email.dmg" dist/HideMyEmail-Mac.dmg
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: HideMyEmail-mac
+          path: dist/HideMyEmail-Mac.dmg
+
+  # The Windows app checks the latest release for updates, so publish only when both builds passed.
+  release:
+    needs: [windows, mac]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: HideMyEmail-*
+          merge-multiple: true
+          path: dist
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v$APP_VERSION" dist/HideMyEmail-Setup.exe dist/HideMyEmail-Mac.dmg \
+            --repo "${{ github.repository }}" --title "Hide My Email $APP_VERSION" --latest \
+            --notes "Built from ${{ github.sha }}.
+
+          - **Windows:** download **HideMyEmail-Setup.exe**. Installed copies update themselves.
+          - **Mac** (Apple Silicon, macOS 14 or later): download **HideMyEmail-Mac.dmg**."

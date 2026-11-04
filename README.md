@@ -18,13 +18,13 @@ Apple's own settings screen for Hide My Email is hidden deep in iCloud settings 
 - **Deactivate** an address to stop its mail (you can undo this), or **delete** it for good.
 - **Select several addresses** and copy, deactivate, reactivate or delete them together.
 - **Export** everything to a CSV file you can open in Excel or Numbers.
-- **Updates itself** on Windows.
+- Runs on **Windows** and **Mac**. The Windows version updates itself.
 
 ## Requirements
 
 - An Apple ID with an **iCloud+** subscription. Hide My Email is part of iCloud+.
 - **Two-factor authentication** on your Apple ID. This is on by default for almost all accounts.
-- **Windows 10 or 11**. A downloadable Mac version isn't available yet; see [Mac](#mac).
+- **Windows 10 or 11**, or a **Mac with Apple silicon** (M1 or later) running **macOS 14 Sonoma** or later. Intel Macs aren't supported.
 
 ## Install on Windows
 
@@ -41,33 +41,48 @@ Hide My Email then appears in the Start menu. To remove it, go to **Settings →
 
 > On a work computer, your organisation's security settings may block unsigned programs completely. If you see "Blocked by your organization", ask your IT department.
 
+## Install on Mac
+
+1. Go to the [latest release](https://github.com/decentquintessential/hidemyemail/releases/latest) and download **HideMyEmail-Mac.dmg**.
+2. Open the downloaded file and drag **Hide My Email** onto the **Applications** folder.
+3. Open Hide My Email from Applications or Launchpad. The first time, macOS says it can't verify the app, because it isn't signed with a paid Apple developer certificate. Click **Done** (not Move to Trash), then:
+   - Open **System Settings → Privacy & Security** and scroll down to the message about Hide My Email.
+   - Click **Open Anyway** and confirm with your Mac password or Touch ID.
+
+   You only need to do this once.
+
+After that, Hide My Email also appears as an envelope icon in the menu bar.
+
 ## Sign in
 
 The first time you open the app, sign in with your **Apple ID and password**, then type the **6-digit code** that appears on your iPhone, iPad or Mac.
 
-Your password is stored securely by your computer: in **Windows Credential Manager** on Windows, or the **Keychain** on a Mac. After the first time, the app signs in on its own. Apple asks for a new code from time to time.
+Your password is stored securely by your computer: in **Windows Credential Manager** on Windows, or the **Keychain** on a Mac. If your Mac asks whether **hme-helper** may use your Keychain, click **Always Allow**. hme-helper is the part of the app that talks to iCloud. After the first time, the app signs in on its own. Apple asks for a new code from time to time.
 
-To sign out and remove the saved password, click **Sign out** in the toolbar.
+To sign out and remove the saved password, click **Sign out** in the toolbar on Windows, or **⋯ → Sign Out** on a Mac.
 
 ## Using the app
 
 ### Create an address
 
-Click **New address** (Ctrl+N), type what it's for (for example "Netflix"), and click **Create & Copy**. If you don't like the generated address, click **Another one** first. The new address is copied to your clipboard, ready to paste into a sign-up form.
+Click **New address** on Windows or **+** on a Mac (or press Ctrl+N or ⌘N). Type what it's for, for example "Netflix", and click **Create & Copy**. If you don't like the generated address, ask for another one first: click **Another one** on Windows, or the circular arrows on a Mac. The new address is copied to your clipboard, ready to paste into a sign-up form.
 
 ### Quick-create from anywhere
 
-Press **Ctrl+Alt+Shift+H** in any program, or click the Hide My Email icon in the system tray (near the clock). Type what the address is for and press **Enter**. The address is created and copied straight away.
+- **Windows:** press **Ctrl+Alt+Shift+H** in any program, or click the Hide My Email icon in the system tray (near the clock).
+- **Mac:** press **⌃⌥⌘H** in any app, or click the envelope icon in the menu bar.
+
+Type what the address is for and press **Enter** (Return on a Mac). The address is created and copied straight away.
 
 ![Quick-create window](docs/windows-quick-create.png)
 
-Closing the main window keeps Hide My Email running in the tray, so the shortcut keeps working. To quit completely, right-click the tray icon and choose **Quit**.
+Closing the main window keeps Hide My Email running in the tray or menu bar, so the shortcut keeps working. To quit completely, right-click the tray icon and choose **Quit** on Windows, or click the menu bar icon and choose **Quit** on a Mac.
 
 ### Find, sort and filter
 
 - Type in the search box to search addresses, labels, notes and websites.
-- The first menu under the search box shows **Active**, **Inactive** or **All** addresses.
-- **Sort** orders the list by **Newest first**, **Oldest first**, **Name A–Z** or **Name Z–A**. "Name" is the label, and addresses without a label go at the bottom. The app remembers your choice.
+- Choose whether to show **Active**, **Inactive** or **All** addresses: with the menu under the search box on Windows, or the buttons at the top of the window on a Mac.
+- **Sort** (above the list) orders the list by **Newest first**, **Oldest first**, **Name A–Z** or **Name Z–A**. "Name" is the label, and addresses without a label go at the bottom. The app remembers your choice.
 
 ### Edit, deactivate or delete
 
@@ -79,7 +94,7 @@ Select an address to see its details. From there you can:
 
 ### Work with several addresses at once
 
-Ctrl-click or Shift-click to select several addresses, or press Ctrl+A to select all of them. Then copy, deactivate, reactivate or delete them in one go, using the buttons on the right or by right-clicking the selection.
+Ctrl-click or Shift-click to select several addresses (⌘-click or ⇧-click on a Mac), or press Ctrl+A or ⌘A to select all of them. Then copy, deactivate, reactivate or delete them in one go, using the buttons on the right or by right-clicking the selection.
 
 ![Several addresses selected](docs/windows-multiselect.png)
 
@@ -96,7 +111,7 @@ Ctrl-click or Shift-click to select several addresses, or press Ctrl+A to select
 
 ### Export
 
-Click **Export CSV…** to save all your addresses, with their labels, notes, status and creation dates, as a spreadsheet file.
+Click **Export CSV…** on Windows, or **⋯ → Export to CSV…** on a Mac, to save all your addresses, with their labels, notes, status and creation dates, as a spreadsheet file.
 
 ## Updates
 
@@ -106,9 +121,7 @@ On Windows, the app checks for a new version shortly after it starts and every f
 
 Click **Restart to update**. The app closes, installs the new version and opens again within a few seconds. The version you have is shown at the bottom right of the window. All versions are listed on the [releases page](https://github.com/decentquintessential/hidemyemail/releases).
 
-## Mac
-
-There is a native Mac version, with the same features plus a menu bar icon for quick-create. It isn't available as a download yet. Until it is, use the Windows app, or manage your addresses in **System Settings → [your name] → iCloud → Hide My Email**.
+The Mac version doesn't update itself yet. To update it, download the newest **HideMyEmail-Mac.dmg** and drag the app to Applications again, replacing the old one. To see which version you have, select Hide My Email in Finder and press ⌘I.
 
 ## Good to know
 
@@ -129,5 +142,5 @@ For those who are curious, or want to contribute:
 
 - The iCloud connection uses the open-source [pyicloud](https://pypi.org/project/pyicloud/) library.
 - The Windows app is written in Python with Qt ([PySide6](https://doc.qt.io/qtforpython-6/)) in [`windows/`](windows). The installer is made with [Inno Setup](https://jrsoftware.org/isinfo.php).
-- The Mac app is written in SwiftUI in [`app/`](app). It uses the same iCloud code as the Windows app, through [`hme_helper.py`](hme_helper.py).
-- Every change is built and tested automatically on a Windows machine by [GitHub Actions](.github/workflows/windows.yml). The tests install the app, check the update process and take the screenshots on this page. Only builds that pass every check are published as a release.
+- The Mac app is written in SwiftUI in [`app/`](app). It uses the same iCloud code as the Windows app, through [`hme_helper.py`](hme_helper.py), which is packaged inside the app so nothing else needs to be installed.
+- Every change is built and tested automatically on a Windows machine and a Mac by [GitHub Actions](.github/workflows/windows.yml). The tests install and open the apps, check the Windows update process and take the screenshots on this page. A release is published only when both builds pass every check.

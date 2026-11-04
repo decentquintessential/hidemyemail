@@ -7,3 +7,4 @@ build/
 selftest/
 .DS_Store
 _version.py
+app/*.dmg

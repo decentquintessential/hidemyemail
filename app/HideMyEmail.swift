@@ -66,14 +66,21 @@ final class Helper {
         .appendingPathComponent(".local/share/hme/venv/bin/python")
 
     init() throws {
-        guard FileManager.default.isExecutableFile(atPath: Helper.python.path) else {
-            throw HelperFailure(message: "Python environment not found at \(Helper.python.path). Run install.sh first.")
+        // Downloaded builds carry a self-contained helper; developer builds run the script with Python.
+        let bundled = Bundle.main.resourceURL?.appendingPathComponent("hme-helper/hme-helper")
+        if let bundled, FileManager.default.isExecutableFile(atPath: bundled.path) {
+            process.executableURL = bundled
+            process.arguments = []
+        } else {
+            guard FileManager.default.isExecutableFile(atPath: Helper.python.path) else {
+                throw HelperFailure(message: "Python environment not found at \(Helper.python.path). Run install.sh first.")
+            }
+            guard let script = Bundle.main.url(forResource: "hme_helper", withExtension: "py") else {
+                throw HelperFailure(message: "hme_helper.py is missing from the app bundle.")
+            }
+            process.executableURL = Helper.python
+            process.arguments = [script.path]
         }
-        guard let script = Bundle.main.url(forResource: "hme_helper", withExtension: "py") else {
-            throw HelperFailure(message: "hme_helper.py is missing from the app bundle.")
-        }
-        process.executableURL = Helper.python
-        process.arguments = [script.path]
         process.standardInput = input
         process.standardOutput = output
         process.standardError = FileHandle.nullDevice
