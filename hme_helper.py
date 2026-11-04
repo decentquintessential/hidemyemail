@@ -42,11 +42,12 @@ class HelperError(Exception):
     pass
 
 
-def with_retry(fn, attempts: int = 4):
-    """Call fn, retrying iCloud's transient "Something went wrong. Try again later" errors.
+def with_retry(fn, attempts: int = 3, reconnect=None):
+    """Call fn, retrying iCloud's "Something went wrong. Try again later" errors.
 
-    iCloud sometimes answers a Hide My Email change with errorCode 500 and a
-    retryAfter hint (seconds); the same call then succeeds a moment later.
+    iCloud answers Hide My Email requests on a stale session with errorCode 500
+    and a retryAfter hint; retrying on the same session keeps failing, so
+    reconnect() (when given) starts a fresh session before each retry.
     """
     for attempt in range(attempts):
         try:
@@ -57,7 +58,9 @@ def with_retry(fn, attempts: int = 4):
             if not transient or attempt == attempts - 1:
                 raise
             match = re.search(r'"retryAfter":\s*(\d+)', text)
-            time.sleep(max(int(match.group(1)) if match else 2, 2) * (attempt + 1))
+            time.sleep(max(int(match.group(1)) if match else 2, 2))
+            if reconnect:
+                reconnect()
 
 
 class Backend:
@@ -140,46 +143,52 @@ class Backend:
             raise HelperError("Two-factor verification is not finished.")
         return self.api
 
+    def _reconnect(self) -> None:
+        """Replace a stale iCloud session with a fresh one (no 2FA: the session is trusted)."""
+        api = PyiCloudService(self.apple_id, self.password, cookie_directory=str(SESSION_DIR))
+        if api.requires_2fa:
+            raise HelperError("iCloud wants you to sign in again. Use Sign Out, then sign back in.")
+        self.api = api
+
+    def _hme(self):
+        return self._require_api().hidemyemail
+
     # ------------------------------------------------------------ aliases
 
     def cmd_list(self, req) -> list[dict[str, Any]]:
-        return with_retry(lambda: list(self._require_api().hidemyemail))
+        return with_retry(lambda: list(self._hme()), reconnect=self._reconnect)
 
     def cmd_generate(self, req) -> dict[str, Any]:
-        email = with_retry(self._require_api().hidemyemail.generate)
+        email = with_retry(lambda: self._hme().generate(), reconnect=self._reconnect)
         if not email:
             raise HelperError("iCloud did not generate an address. You may have hit Apple's hourly limit.")
         return {"hme": email}
 
     def cmd_reserve(self, req) -> dict[str, Any]:
-        hme = self._require_api().hidemyemail
         return self._checked(
-            lambda: hme.reserve(req["hme"], req["label"], req.get("note") or ""), "Creating the address"
+            lambda: self._hme().reserve(req["hme"], req["label"], req.get("note") or ""), "Creating the address"
         )
 
     def cmd_update(self, req) -> dict[str, Any]:
-        hme = self._require_api().hidemyemail
-        return self._checked(lambda: hme.update_metadata(req["id"], req["label"], req.get("note")), "Saving")
+        return self._checked(
+            lambda: self._hme().update_metadata(req["id"], req["label"], req.get("note")), "Saving"
+        )
 
     def cmd_deactivate(self, req) -> dict[str, Any]:
-        hme = self._require_api().hidemyemail
-        return self._checked(lambda: hme.deactivate(req["id"]), "Deactivating")
+        return self._checked(lambda: self._hme().deactivate(req["id"]), "Deactivating")
 
     def cmd_reactivate(self, req) -> dict[str, Any]:
-        hme = self._require_api().hidemyemail
-        return self._checked(lambda: hme.reactivate(req["id"]), "Reactivating")
+        return self._checked(lambda: self._hme().reactivate(req["id"]), "Reactivating")
 
     def cmd_delete(self, req) -> dict[str, Any]:
-        hme = self._require_api().hidemyemail
         # iCloud only deletes addresses that are already deactivated.
         if req.get("active"):
-            self._checked(lambda: hme.deactivate(req["id"]), "Deactivating")
-        return self._checked(lambda: hme.delete(req["id"]), "Deleting")
+            self._checked(lambda: self._hme().deactivate(req["id"]), "Deactivating")
+        return self._checked(lambda: self._hme().delete(req["id"]), "Deleting")
 
-    @staticmethod
-    def _checked(call, what: str) -> dict[str, Any]:
+    def _checked(self, call, what: str) -> dict[str, Any]:
         try:
-            result = with_retry(call)
+            result = with_retry(call, reconnect=self._reconnect)
         except Exception as exc:
             if "Try again later" not in str(exc):
                 raise
