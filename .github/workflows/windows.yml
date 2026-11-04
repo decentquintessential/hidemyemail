@@ -71,15 +71,21 @@ jobs:
           "Installed: $exe"
           "Start-menu shortcut: $lnk"
 
-          # Install again exactly as the in-app updater does; the installer should reopen the app.
-          # Wait for the installer only: Start-Process -Wait would also wait for the app it reopens.
-          $p = Start-Process dist\HideMyEmail-Setup.exe -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/RELAUNCH=1" -PassThru
-          if (-not $p.WaitForExit(180000)) { throw "Update install did not finish within 3 minutes" }
-          if ($p.ExitCode -ne 0) { throw "Update install exited with $($p.ExitCode)" }
-          Start-Sleep -Seconds 5
+          # Update the way "Restart to update" does: the installed (packaged) app starts the
+          # installer and quits, the installer reopens it. The reopened app must really start,
+          # which it proves by writing last-start.txt (a startup failure shows an error box instead).
+          $marker = "$env:APPDATA\HideMyEmail\last-start.txt"
+          $p = Start-Process $exe -ArgumentList "--test-update", "dist\HideMyEmail-Setup.exe" -PassThru
+          if (-not $p.WaitForExit(60000)) { throw "The app did not hand over to the installer" }
+          Remove-Item $marker -ErrorAction SilentlyContinue
+          $deadline = (Get-Date).AddMinutes(3)
+          while (-not (Test-Path $marker) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
           $running = Get-Process HideMyEmail -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe }
-          if (-not $running) { throw "The installer did not reopen the app after updating" }
-          "Update install reopened the app (pid $($running[0].Id))"
+          if (-not (Test-Path $marker)) {
+            $running | Stop-Process -Force -ErrorAction SilentlyContinue
+            throw "After the update the app did not start properly"
+          }
+          "Updated from inside the app; reopened app started: $(Get-Content $marker)"
           $running | Stop-Process -Force
 
       - uses: actions/upload-artifact@v7

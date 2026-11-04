@@ -88,6 +88,35 @@ def find_update(current: str = APP_VERSION) -> dict | None:
     return {"version": version, "url": asset["browser_download_url"], "size": asset.get("size", 0)}
 
 
+def launch_installer(installer: Path):
+    """Start the update installer, detached, with /RELAUNCH=1 so it reopens the app afterwards.
+
+    The packaged app unpacks itself into a temporary _MEI folder and tells its own child
+    processes about it through environment variables. Left in place, they reach the app
+    the installer reopens, which then looks for its files in this app's _MEI folder -
+    deleted by the time it starts ("Failed to load Python DLL"). So start the installer
+    with those variables removed, and tell PyInstaller to start fresh.
+    """
+    import subprocess
+
+    env = {k: v for k, v in os.environ.items() if not k.upper().startswith(("_PYI", "_MEI"))}
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    subprocess.Popen([str(installer), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/RELAUNCH=1"],
+                     creationflags=flags, close_fds=True, env=env, cwd=str(Path(installer).parent))
+
+
+def record_start():
+    """Note the version and time of every start, so tests can tell the app really started."""
+    from hme_helper import APP_DIR
+
+    try:
+        APP_DIR.mkdir(parents=True, exist_ok=True)
+        (APP_DIR / "last-start.txt").write_text(f"{APP_VERSION} {datetime.now().isoformat()}\n")
+    except OSError:
+        pass
+
+
 def download_update(update: dict) -> Path:
     """Download the installer to %TEMP%; checks the size GitHub reported."""
     import tempfile
@@ -584,12 +613,7 @@ class MainWindow(QMainWindow):
 
     def install_update(self):
         """Run the downloaded installer silently; it reopens the app when done."""
-        import subprocess
-
-        _, installer = self.update_ready
-        flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-        subprocess.Popen([str(installer), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/RELAUNCH=1"],
-                         creationflags=flags, close_fds=True)
+        launch_installer(self.update_ready[1])
         self.quit_app()
 
     def closeEvent(self, event):
@@ -1133,6 +1157,11 @@ def main() -> int:
             k32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
             k32.TerminateProcess(k32.GetCurrentProcess(), code)
         os._exit(code)
+    record_start()
+    if "--test-update" in sys.argv:
+        # CI: start an installer exactly as "Restart to update" does, then quit.
+        launch_installer(Path(sys.argv[sys.argv.index("--test-update") + 1]).resolve())
+        return 0
     app = QApplication(sys.argv)
     app.setApplicationName("Hide My Email")
     app.setStyle("Fusion") if sys.platform != "win32" else None
