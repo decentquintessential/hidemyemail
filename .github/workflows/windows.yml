@@ -133,8 +133,33 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt pyinstaller
 
+      # One fixed self-signed certificate (stored as repository secrets) signs every
+      # release, so the Mac Keychain keeps trusting the app after it updates itself.
+      # Without the secrets the build falls back to ad-hoc signing.
+      - name: Load signing certificate
+        env:
+          P12: ${{ secrets.MAC_SIGNING_P12 }}
+          P12_PASSWORD: ${{ secrets.MAC_SIGNING_PASSWORD }}
+          SHA1: ${{ secrets.MAC_SIGNING_SHA1 }}
+        run: |
+          if [ -z "$P12" ]; then echo "No signing certificate configured: signing ad-hoc."; exit 0; fi
+          KC="$RUNNER_TEMP/signing.keychain-db"
+          KCPASS="$(openssl rand -hex 16)"
+          security create-keychain -p "$KCPASS" "$KC"
+          security set-keychain-settings -lut 3600 "$KC"
+          security unlock-keychain -p "$KCPASS" "$KC"
+          echo "$P12" | base64 --decode > "$RUNNER_TEMP/signing.p12"
+          security import "$RUNNER_TEMP/signing.p12" -k "$KC" -P "$P12_PASSWORD" -T /usr/bin/codesign >/dev/null
+          rm -f "$RUNNER_TEMP/signing.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KCPASS" "$KC" >/dev/null
+          echo "SIGN_IDENTITY=$SHA1" >> "$GITHUB_ENV"
+          echo "SIGN_KEYCHAIN=$KC" >> "$GITHUB_ENV"
+          echo "Signing with the release certificate."
+
       - name: Build app and disk image
-        run: PYTHON=python ./app/build.sh --standalone --dmg
+        run: |
+          PYTHON=python ./app/build.sh --standalone --dmg
+          codesign -dr - "app/Hide My Email.app" 2>&1 | tail -1
 
       - name: Test the bundled helper
         run: |
@@ -155,6 +180,22 @@ jobs:
           pgrep -fl "Hide My Email.app/Contents/MacOS/HideMyEmail"
           pgrep -fl "hme-helper/hme-helper"
           cat "$HOME/Library/Application Support/hme/helper.log"
+          pkill -f "Hide My Email.app/Contents/MacOS/HideMyEmail" || true
+
+      - name: Test updating an older copy
+        run: |
+          # Pretend an older version is installed, then run the updater's script on the new disk image.
+          mkdir -p "$RUNNER_TEMP/old"
+          ditto "/Applications/Hide My Email.app" "$RUNNER_TEMP/old/Hide My Email.app"
+          /usr/libexec/PlistBuddy -c "Set CFBundleShortVersionString 1.0.0" "$RUNNER_TEMP/old/Hide My Email.app/Contents/Info.plist"
+          sleep 2 & DUMMY=$!
+          /bin/bash app/update.sh $DUMMY "$PWD/app/Hide My Email.dmg" "$RUNNER_TEMP/old/Hide My Email.app"
+          cat "$HOME/Library/Application Support/hme/update.log"
+          NOW=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$RUNNER_TEMP/old/Hide My Email.app/Contents/Info.plist")
+          test "$NOW" = "$APP_VERSION" || { echo "still on $NOW"; exit 1; }
+          sleep 10
+          pgrep -fl "$RUNNER_TEMP/old/Hide My Email.app/Contents/MacOS/HideMyEmail" || { echo "the updated app did not reopen"; exit 1; }
+          echo "Updated 1.0.0 -> $NOW and reopened."
           pkill -f "Hide My Email.app/Contents/MacOS/HideMyEmail" || true
 
       - name: Name the download
@@ -188,4 +229,4 @@ jobs:
             --notes "Built from ${{ github.sha }}.
 
           - **Windows:** download **HideMyEmail-Setup.exe**. Installed copies update themselves.
-          - **Mac** (Apple Silicon, macOS 14 or later): download **HideMyEmail-Mac.dmg**."
+          - **Mac** (Apple Silicon, macOS 14 or later): download **HideMyEmail-Mac.dmg**. Installed copies update themselves."

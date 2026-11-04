@@ -611,12 +611,14 @@ struct MainView: View {
                     .keyboardShortcut("n")
                 Menu {
                     Button("Export to CSV…") { model.exportCSV() }
+                    Button("Check for Updates…") { Task { await Updater.shared.check(manual: true) } }
                     Divider()
                     Button("Sign Out \(model.appleId)") { Task { await model.logout() } }
                 } label: { Label("More", systemImage: "ellipsis.circle") }
             }
         }
         .sheet(isPresented: $showingNew) { NewAliasSheet() }
+        .safeAreaInset(edge: .top, spacing: 0) { UpdateBanner() }
         .overlay(alignment: .bottom) {
             if let toast = model.toast {
                 Text(toast)
@@ -809,6 +811,7 @@ struct NewAliasSheet: View {
 
 struct QuickCreateView: View {
     @EnvironmentObject var model: AppModel
+    @ObservedObject private var updater = Updater.shared
     @Environment(\.openWindow) private var openWindow
     var onDone: () -> Void = {}
     @State private var label = ""
@@ -842,6 +845,14 @@ struct QuickCreateView: View {
                 Spacer(minLength: 0)
             }
             .frame(minHeight: 20)
+            if let ready = updater.ready {
+                HStack {
+                    Image(systemName: "arrow.down.circle.fill").foregroundStyle(.tint)
+                    Text("Version \(ready.version) is ready").font(.callout)
+                    Spacer()
+                    Button("Restart to Update") { updater.install() }.controlSize(.small)
+                }
+            }
             Divider()
             HStack {
                 Button("Open Hide My Email") {
@@ -922,6 +933,151 @@ final class QuickPanel {
     }
 }
 
+// MARK: - Updates
+
+/// Checks GitHub for a newer release, downloads its disk image in the background,
+/// and on request swaps it in with Resources/update.sh and reopens the app.
+@MainActor
+final class Updater: ObservableObject {
+    static let shared = Updater()
+    static let releasesAPI = URL(string: "https://api.github.com/repos/decentquintessential/hidemyemail/releases/latest")!
+    static let asset = "HideMyEmail-Mac.dmg"
+
+    struct Ready: Equatable { let version: String; let dmg: URL }
+    @Published var ready: Ready?
+    @Published var dismissed = false
+    private var timer: Timer?
+    private var checking = false
+
+    var current: String { Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0" }
+
+    /// Only downloaded builds update themselves; developer builds have no bundled helper.
+    var enabled: Bool {
+        let helper = Bundle.main.resourceURL?.appendingPathComponent("hme-helper/hme-helper").path ?? ""
+        return FileManager.default.isExecutableFile(atPath: helper)
+            && Bundle.main.url(forResource: "update", withExtension: "sh") != nil
+    }
+
+    func start() {
+        guard enabled, timer == nil else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10) { Task { await self.check() } }
+        timer = Timer.scheduledTimer(withTimeInterval: 6 * 3600, repeats: true) { _ in
+            Task { @MainActor in await Updater.shared.check() }
+        }
+    }
+
+    static func parse(_ version: String) -> [Int] {
+        version.trimmingCharacters(in: CharacterSet(charactersIn: "vV ")).split(separator: ".").map { Int($0) ?? 0 }
+    }
+
+    static func isNewer(_ a: String, than b: String) -> Bool {
+        let x = parse(a), y = parse(b)
+        for i in 0..<max(x.count, y.count) {
+            let l = i < x.count ? x[i] : 0, r = i < y.count ? y[i] : 0
+            if l != r { return l > r }
+        }
+        return false
+    }
+
+    func check(manual: Bool = false) async {
+        guard enabled else {
+            if manual { alert("Updates aren't available for this build", "This copy wasn't downloaded from GitHub, so it can't update itself.") }
+            return
+        }
+        if ready != nil { dismissed = false; return }
+        guard !checking else { return }
+        checking = true
+        defer { checking = false }
+        do {
+            var request = URLRequest(url: Self.releasesAPI)
+            request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+            request.setValue("HideMyEmail/\(current)", forHTTPHeaderField: "User-Agent")
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard (response as? HTTPURLResponse)?.statusCode == 200,
+                  let release = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let tag = release["tag_name"] as? String else {
+                throw HelperFailure(message: "GitHub didn't return the latest release.")
+            }
+            let version = tag.trimmingCharacters(in: CharacterSet(charactersIn: "vV"))
+            let assets = release["assets"] as? [[String: Any]] ?? []
+            guard Self.isNewer(version, than: current),
+                  let asset = assets.first(where: { $0["name"] as? String == Self.asset }),
+                  let link = asset["browser_download_url"] as? String, let url = URL(string: link) else {
+                if manual { alert("You're up to date", "Hide My Email \(current) is the newest version.") }
+                return
+            }
+            let dmg = try await download(url, version: version, size: asset["size"] as? Int ?? 0)
+            ready = Ready(version: version, dmg: dmg)
+            dismissed = false
+        } catch {
+            // Automatic checks stay quiet, e.g. when offline.
+            if manual { alert("Couldn't check for updates", error.localizedDescription) }
+        }
+    }
+
+    private func download(_ url: URL, version: String, size: Int) async throws -> URL {
+        let folder = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("HideMyEmail-update", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let target = folder.appendingPathComponent("HideMyEmail-\(version).dmg")
+        if let existing = try? target.resourceValues(forKeys: [.fileSizeKey]).fileSize, existing == size, size > 0 {
+            return target
+        }
+        let (temp, response) = try await URLSession.shared.download(from: url)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+            throw HelperFailure(message: "Downloading the update failed.")
+        }
+        let got = (try? temp.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? -1
+        if size > 0 && got != size { throw HelperFailure(message: "The downloaded update was incomplete.") }
+        try? FileManager.default.removeItem(at: target)
+        try FileManager.default.moveItem(at: temp, to: target)
+        return target
+    }
+
+    /// Hand over to update.sh, which waits for this app to quit, replaces it and reopens it.
+    func install() {
+        guard let ready, let script = Bundle.main.url(forResource: "update", withExtension: "sh") else { return }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process.arguments = [script.path, String(ProcessInfo.processInfo.processIdentifier),
+                             ready.dmg.path, Bundle.main.bundlePath]
+        do {
+            try process.run()
+            NSApp.terminate(nil)
+        } catch {
+            alert("Couldn't install the update", error.localizedDescription)
+        }
+    }
+
+    private func alert(_ title: String, _ text: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = text
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
+    }
+}
+
+struct UpdateBanner: View {
+    @ObservedObject var updater = Updater.shared
+
+    var body: some View {
+        if let ready = updater.ready, !updater.dismissed {
+            HStack(spacing: 12) {
+                Image(systemName: "arrow.down.circle.fill").foregroundStyle(.tint)
+                Text("Hide My Email \(ready.version) is ready to install (you have \(updater.current)).")
+                Spacer()
+                Button("Later") { updater.dismissed = true }.buttonStyle(.borderless)
+                Button("Restart to Update") { updater.install() }.buttonStyle(.borderedProminent)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(.tint.opacity(0.12))
+            .overlay(alignment: .bottom) { Divider() }
+        }
+    }
+}
+
 // MARK: - App
 
 @main
@@ -930,6 +1086,7 @@ struct HideMyEmailApp: App {
 
     init() {
         QuickPanel.shared.registerHotKey()
+        Updater.shared.start()
     }
 
     var body: some Scene {
@@ -939,6 +1096,11 @@ struct HideMyEmailApp: App {
                 .frame(minWidth: 760, minHeight: 480)
         }
         .windowToolbarStyle(.unified)
+        .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") { Task { await Updater.shared.check(manual: true) } }
+            }
+        }
 
         MenuBarExtra("Hide My Email", systemImage: "envelope.badge.shield.half.filled") {
             QuickCreateView().environmentObject(model)

@@ -7,10 +7,16 @@
 #   app/build.sh --standalone --dmg   ...and packages it as "Hide My Email.dmg"
 #
 # APP_VERSION (e.g. 1.0.20) sets the version shown in Finder; default 1.0.
+# SIGN_IDENTITY names a code-signing certificate; default "-" (ad-hoc). Releases use
+# one fixed certificate so the Keychain keeps trusting the app across updates.
+# SIGN_KEYCHAIN optionally names the keychain file that holds it.
 set -e
 HERE="${0:A:h}"
 APP="$HERE/Hide My Email.app"
 VERSION="${APP_VERSION:-1.0}"
+IDENTITY="${SIGN_IDENTITY:--}"
+SIGN_ARGS=(--force --sign "$IDENTITY")
+[[ -n "${SIGN_KEYCHAIN:-}" ]] && SIGN_ARGS+=(--keychain "$SIGN_KEYCHAIN")
 STANDALONE=0
 DMG=0
 for arg in "$@"; do
@@ -40,6 +46,7 @@ if [[ $STANDALONE == 1 ]]; then
     "$HERE/../hme_helper.py" >"$WORK/pyinstaller.log" 2>&1 \
     || { tail -30 "$WORK/pyinstaller.log"; exit 1; }
   cp -R "$WORK/dist/hme-helper" "$APP/Contents/Resources/hme-helper"
+  cp "$HERE/update.sh" "$APP/Contents/Resources/update.sh"
 else
   cp "$HERE/../hme_helper.py" "$APP/Contents/Resources/hme_helper.py"
 fi
@@ -70,13 +77,16 @@ swift "$HERE/make_icon.swift" "$ICONSET" >/dev/null 2>&1 \
   && iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns" \
   || echo "(skipped icon)"
 
-# Ad-hoc signatures (no Apple developer certificate): sign the helper's
-# binaries first, then the app, so macOS accepts every piece of code.
+# Sign the helper's binaries first, then the app, so macOS accepts every piece of code.
 if [[ $STANDALONE == 1 ]]; then
-  find "$APP/Contents/Resources/hme-helper" -type f \( -perm -u+x -o -name '*.dylib' -o -name '*.so' \) \
-    -exec codesign --force --sign - {} \; 2>/dev/null
+  find "$APP/Contents/Resources/hme-helper" -type f \( -perm -u+x -o -name '*.dylib' -o -name '*.so' \) -print0 \
+    | while IFS= read -r -d '' f; do
+        if file -b "$f" | grep -q Mach-O; then
+          codesign "${SIGN_ARGS[@]}" "$f" 2>&1 | grep -v "replacing existing signature" || true
+        fi
+      done
 fi
-codesign --force --sign - "$APP" >/dev/null
+codesign "${SIGN_ARGS[@]}" "$APP" 2>&1 | grep -v "replacing existing signature" || true
 codesign --verify "$APP"
 echo "Built: $APP"
 
