@@ -193,8 +193,9 @@ class Backend:
             if "Try again later" not in str(exc):
                 raise
             raise HelperError(
-                f"{what} failed: iCloud kept answering \"try again later\". "
-                "Wait a minute and try again."
+                f"{what} failed: iCloud isn't accepting this change right now.\n\n"
+                "This usually happens when the address was created or changed in the "
+                "last few minutes. Try again in a few minutes."
             ) from exc
         if not result:
             raise HelperError(f"{what} failed (iCloud returned no result).")
