@@ -32,12 +32,18 @@ if "--selftest" in sys.argv:
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from PySide6.QtCore import QObject, QRunnable, QSettings, Qt, QThreadPool, QTimer, Signal
-from PySide6.QtGui import QAction, QColor, QFont, QGuiApplication, QIcon, QKeySequence, QPainter, QPixmap
+from PySide6.QtCore import (
+    QAbstractNativeEventFilter, QItemSelectionModel, QObject, QRunnable, QSettings, Qt, QThreadPool,
+    QTimer, Signal,
+)
+from PySide6.QtGui import (
+    QAction, QColor, QFont, QGuiApplication, QIcon, QKeySequence, QPainter, QPixmap, QShortcut,
+)
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QDialog, QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
-    QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPlainTextEdit, QPushButton, QSplitter,
-    QStackedWidget, QToolBar, QVBoxLayout, QWidget,
+    QAbstractItemView, QApplication, QComboBox, QDialog, QFileDialog, QFormLayout, QHBoxLayout,
+    QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox,
+    QPlainTextEdit, QPushButton, QSplitter, QStackedWidget, QSystemTrayIcon, QToolBar,
+    QVBoxLayout, QWidget,
 )
 
 from hme_helper import Backend
@@ -77,6 +83,19 @@ def sort_aliases(aliases: list[dict], order: str) -> list[dict]:
         labelled.sort(key=lambda a: a["label"].casefold(), reverse=order.endswith("Z–A"))
         return labelled + rest
     return sorted(aliases, key=lambda a: a.get("createTimestamp") or 0, reverse=order == "Newest first")
+
+
+def origin_text(a: dict) -> str:
+    """Where the address was made: "Safari — example.com", "Created by hand", or an app name."""
+    kind, domain, app = a.get("origin") or "", a.get("domain") or "", a.get("originAppName") or ""
+    source = {"SAFARI": "Safari", "ON_DEMAND": "Created by hand", "": ""}.get(kind, app or kind.capitalize())
+    if domain:
+        source = f"{source} — {domain}" if source else domain
+    return source
+
+
+def plural(n: int, word: str = "address") -> str:
+    return f"{n} {word}" + ("" if n == 1 else "es")
 
 
 def fmt_date(ms) -> str:
@@ -218,6 +237,105 @@ class NewAliasDialog(QDialog):
         )
 
 
+class QuickCreateDialog(QDialog):
+    """Small always-on-top window: type a label, press Enter, the new address is copied."""
+
+    def __init__(self, win: "MainWindow"):
+        super().__init__(None, Qt.WindowStaysOnTopHint | Qt.WindowCloseButtonHint)
+        self.win = win
+        self.setWindowTitle("New Hide My Email address")
+        self.setWindowIcon(app_icon())
+        self.setMinimumWidth(380)
+        self.label = QLineEdit(placeholderText="What's it for? e.g. Netflix")
+        self.label.returnPressed.connect(self.create)
+        self.status = QLabel("Press Enter to create it and copy it.")
+        self.status.setWordWrap(True)
+        self.status.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        open_app = QPushButton("Open Hide My Email")
+        open_app.setFlat(True)
+        open_app.clicked.connect(lambda: (self.hide(), win.bring_to_front()))
+        hint = muted(HOTKEY_TEXT)
+        row = QHBoxLayout()
+        row.addWidget(open_app)
+        row.addStretch()
+        row.addWidget(hint)
+        v = QVBoxLayout(self)
+        v.addWidget(self.label)
+        v.addWidget(self.status)
+        v.addLayout(row)
+
+    def popup(self):
+        self.label.clear()
+        self.label.setEnabled(True)
+        self.status.setText("Press Enter to create it and copy it.")
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        self.label.setFocus()
+
+    def create(self):
+        text = self.label.text().strip()
+        if not text:
+            return
+        if self.win.stack.currentWidget() is not self.win.main_page:
+            self.status.setText("Open Hide My Email and sign in first.")
+            return
+        self.label.setEnabled(False)
+        self.status.setText("Creating…")
+        backend = self.win.backend
+
+        def work():
+            address = backend.cmd_generate({})["hme"]
+            backend.cmd_reserve({"hme": address, "label": text, "note": ""})
+            return address
+
+        def ok(address):
+            self.win.copy(address)
+            self.win.reload(select=address)
+            self.status.setText(f"✓ {address} — copied")
+            self.label.clear()
+            self.label.setEnabled(True)
+            self.label.setFocus()
+
+        def failed():
+            self.label.setEnabled(True)
+            self.status.setText("Couldn't create an address. See the message for details.")
+
+        self.win.run(work, ok, on_error=failed, parent=self)
+
+
+HOTKEY_TEXT = "Ctrl+Alt+Shift+H"
+_WM_HOTKEY = 0x0312
+
+
+class GlobalHotKey(QAbstractNativeEventFilter):
+    """Windows-only system-wide shortcut (RegisterHotKey) that calls `callback`."""
+
+    def __init__(self, callback):
+        super().__init__()
+        self.callback = callback
+        self.registered = False
+        if sys.platform != "win32":
+            return
+        import ctypes
+
+        MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_NOREPEAT = 0x1, 0x2, 0x4, 0x4000
+        self.registered = bool(ctypes.windll.user32.RegisterHotKey(
+            None, 1, MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_NOREPEAT, ord("H")))
+        if self.registered:
+            QApplication.instance().installNativeEventFilter(self)
+
+    def nativeEventFilter(self, event_type, message):
+        if event_type in (b"windows_generic_MSG", b"windows_dispatcher_MSG"):
+            from ctypes import wintypes
+
+            msg = wintypes.MSG.from_address(int(message))
+            if msg.message == _WM_HOTKEY and msg.wParam == 1:
+                QTimer.singleShot(0, self.callback)
+                return True, 0
+        return False, 0
+
+
 class MainWindow(QMainWindow):
     def __init__(self, backend: Backend):
         super().__init__()
@@ -241,7 +359,7 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------ plumbing
 
-    def run(self, fn, on_ok, on_error=None):
+    def run(self, fn, on_ok, on_error=None, parent=None):
         job = _Job(fn)
         self.jobs.add(job)
         self.statusBar().showMessage("Working…")
@@ -259,7 +377,7 @@ class MainWindow(QMainWindow):
 
         def failed(message):
             finish()
-            QMessageBox.warning(self, "Something went wrong", message)
+            QMessageBox.warning(parent or self, "Something went wrong", message)
             if on_error:
                 on_error()
 
@@ -269,7 +387,48 @@ class MainWindow(QMainWindow):
 
     def copy(self, text: str):
         QGuiApplication.clipboard().setText(text)
-        self.statusBar().showMessage(f"Copied {text}", 2500)
+        lines = text.count("\n") + 1
+        self.statusBar().showMessage(f"Copied {plural(lines)}" if lines > 1 else f"Copied {text}", 2500)
+
+    def bring_to_front(self):
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
+    # ------------------------------------------------------------ tray and hotkey
+
+    def setup_tray(self):
+        """Tray icon with quick-create; closing the window then keeps the app in the tray."""
+        self.quick = QuickCreateDialog(self)
+        self.hotkey = GlobalHotKey(self.quick.popup)
+        self.tray = None
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+        menu = QMenu()
+        menu.addAction("New address…", self.quick.popup)
+        menu.addAction("Open Hide My Email", self.bring_to_front)
+        menu.addSeparator()
+        menu.addAction("Quit", QApplication.instance().quit)
+        self.tray = QSystemTrayIcon(app_icon(), self)
+        self.tray.setToolTip(f"Hide My Email — {HOTKEY_TEXT} for a new address")
+        self.tray.setContextMenu(menu)
+        self.tray.activated.connect(
+            lambda reason: self.quick.popup() if reason == QSystemTrayIcon.Trigger else None)
+        self.tray.show()
+        QApplication.instance().setQuitOnLastWindowClosed(False)
+        self._told_about_tray = False
+
+    def closeEvent(self, event):
+        if getattr(self, "tray", None):
+            event.ignore()
+            self.hide()
+            if not self._told_about_tray:
+                self._told_about_tray = True
+                self.tray.showMessage("Hide My Email is still running",
+                                      f"Click the tray icon or press {HOTKEY_TEXT} for a new address. "
+                                      "Right-click it to quit.", app_icon(), 5000)
+        else:
+            super().closeEvent(event)
 
     # ------------------------------------------------------------ sign in
 
@@ -359,7 +518,7 @@ class MainWindow(QMainWindow):
             action.triggered.connect(slot)
             self.toolbar.addAction(action)
 
-        self.search = QLineEdit(placeholderText="Search address, label, note", clearButtonEnabled=True)
+        self.search = QLineEdit(placeholderText="Search address, label, note, website", clearButtonEnabled=True)
         self.search.textChanged.connect(self.refresh_list)
         self.filter = QComboBox()
         self.filter.addItems(["Active", "Inactive", "All"])
@@ -370,7 +529,13 @@ class MainWindow(QMainWindow):
         self.sort.currentTextChanged.connect(self._sort_changed)
         self.list = QListWidget()
         self.list.setAlternatingRowColors(True)
-        self.list.currentItemChanged.connect(self.show_detail)
+        self.list.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.list.itemSelectionChanged.connect(self.show_detail)
+        self.list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.list.customContextMenuRequested.connect(self.list_menu)
+        QShortcut(QKeySequence.Copy, self.list, self.copy_selected, context=Qt.WidgetShortcut)
+        QShortcut(QKeySequence.Delete, self.list, lambda: self.ask_delete(self.selected()),
+                  context=Qt.WidgetShortcut)
         self.count = QLabel()
         self.count.setStyleSheet("color: palette(placeholder-text);")
 
@@ -389,10 +554,13 @@ class MainWindow(QMainWindow):
         lv.addWidget(self.count)
 
         self.detail_stack = QStackedWidget()
-        self.empty_detail = centered(muted("Select an address, or press Ctrl+N to create one."))
+        self.empty_detail = centered(muted(
+            "Select an address, or press Ctrl+N to create one.\n"
+            "Ctrl-click or Shift-click to select several."))
         self.detail = self._build_detail()
-        self.detail_stack.addWidget(self.empty_detail)
-        self.detail_stack.addWidget(self.detail)
+        self.batch = self._build_batch()
+        for page in (self.empty_detail, self.detail, self.batch):
+            self.detail_stack.addWidget(page)
 
         splitter = QSplitter()
         splitter.addWidget(left)
@@ -409,6 +577,7 @@ class MainWindow(QMainWindow):
         self.d_status = QLabel()
         self.d_forward = QLabel()
         self.d_created = QLabel()
+        self.d_origin = QLabel()
         self.d_label = QLineEdit()
         self.d_note = QPlainTextEdit()
         self.d_note.setMaximumHeight(110)
@@ -418,7 +587,7 @@ class MainWindow(QMainWindow):
         self.toggle.clicked.connect(self.toggle_active)
         delete = QPushButton("Delete…")
         delete.setStyleSheet("color: #c62828;")
-        delete.clicked.connect(self.delete_alias)
+        delete.clicked.connect(lambda: self.ask_delete(self.selected(), allow_deactivate=False))
 
         head = QHBoxLayout()
         head.addWidget(self.d_address, 1)
@@ -427,6 +596,7 @@ class MainWindow(QMainWindow):
         form.addRow("Status", self.d_status)
         form.addRow("Forwards to", self.d_forward)
         form.addRow("Created", self.d_created)
+        form.addRow("Created from", self.d_origin)
         form.addRow("Label", self.d_label)
         form.addRow("Note", self.d_note)
         save_row = QHBoxLayout()
@@ -451,6 +621,33 @@ class MainWindow(QMainWindow):
         v.addWidget(hint)
         return page
 
+    def _build_batch(self) -> QWidget:
+        self.b_title = heading("", 16)
+        self.b_counts = muted("")
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        for text, slot in (
+            ("Copy all", self.copy_selected),
+            ("Deactivate", lambda: self.set_active(self.selected(), False)),
+            ("Reactivate", lambda: self.set_active(self.selected(), True)),
+            ("Delete…", lambda: self.ask_delete(self.selected(), allow_deactivate=False)),
+        ):
+            button = QPushButton(text)
+            button.clicked.connect(slot)
+            if text.startswith("Delete"):
+                button.setStyleSheet("color: #c62828;")
+            buttons.addWidget(button)
+        buttons.addStretch()
+        page = QWidget()
+        v = QVBoxLayout(page)
+        v.addStretch()
+        v.addWidget(self.b_title)
+        v.addWidget(self.b_counts)
+        v.addSpacing(12)
+        v.addLayout(buttons)
+        v.addStretch()
+        return page
+
     def show_main(self):
         self.toolbar.setVisible(True)
         self.stack.setCurrentWidget(self.main_page)
@@ -463,7 +660,7 @@ class MainWindow(QMainWindow):
         self.run(lambda: self.backend.cmd_list({}), ok)
 
     def set_aliases(self, aliases, select=None):
-        keep = select or (self.current() or {}).get("hme")
+        keep = {select} if select else {a.get("hme") for a in self.selected()}
         self.aliases = list(aliases)
         self.refresh_list(keep=keep)
 
@@ -477,12 +674,13 @@ class MainWindow(QMainWindow):
         shown = [
             a for a in self.aliases
             if (mode == "All" or a.get("isActive", True) == (mode == "Active"))
-            and (not q or any(q in (a.get(k) or "").lower() for k in ("hme", "label", "note")))
+            and (not q or any(q in (a.get(k) or "").lower() for k in ("hme", "label", "note"))
+                 or q in origin_text(a).lower())
         ]
         return sort_aliases(shown, self.sort.currentText())
 
     def refresh_list(self, *_, keep=None):
-        keep = keep or (self.current() or {}).get("hme")
+        keep = keep if keep is not None else {a.get("hme") for a in self.selected()}
         self.list.blockSignals(True)
         self.list.clear()
         shown = self.visible()
@@ -494,22 +692,39 @@ class MainWindow(QMainWindow):
             if not a.get("isActive", True):
                 item.setForeground(QColor("gray"))
             self.list.addItem(item)
-            if a.get("hme") == keep:
-                self.list.setCurrentItem(item)
+            if a.get("hme") in keep:
+                item.setSelected(True)
+                self.list.setCurrentItem(item, QItemSelectionModel.NoUpdate)
         self.list.blockSignals(False)
-        self.count.setText(f"{len(shown)} of {len(self.aliases)} addresses")
         self.show_detail()
 
+    def selected(self) -> list[dict]:
+        """Selected addresses, in list order."""
+        rows = sorted(self.list.selectedItems(), key=self.list.row)
+        return [item.data(Qt.UserRole) for item in rows]
+
     def current(self) -> dict | None:
-        item = self.list.currentItem()
-        return item.data(Qt.UserRole) if item else None
+        """The selected address when exactly one is selected."""
+        chosen = self.selected()
+        return chosen[0] if len(chosen) == 1 else None
 
     def show_detail(self, *_):
+        chosen = self.selected()
+        shown = self.list.count()
+        self.count.setText(f"{len(chosen)} selected · {shown} of {len(self.aliases)} addresses"
+                           if len(chosen) > 1 else f"{shown} of {len(self.aliases)} addresses")
+        if len(chosen) > 1:
+            active = sum(a.get("isActive", True) for a in chosen)
+            self.b_title.setText(f"{len(chosen)} addresses selected")
+            self.b_counts.setText(f"{active} active, {len(chosen) - active} inactive")
+            self.detail_stack.setCurrentWidget(self.batch)
+            return
         a = self.current()
         if not a:
             self.detail_stack.setCurrentWidget(self.empty_detail)
             return
         self.detail_stack.setCurrentWidget(self.detail)
+        self.d_origin.setText(origin_text(a) or "—")
         active = a.get("isActive", True)
         self.d_address.setText(a.get("hme", ""))
         self.d_status.setText("Active — forwarding mail" if active else "Inactive — not forwarding")
@@ -539,22 +754,78 @@ class MainWindow(QMainWindow):
         if a.get("isActive", True):
             if QMessageBox.question(self, "Deactivate", f"Stop forwarding mail from {a['hme']}?") != QMessageBox.Yes:
                 return
-            fn = lambda: self.backend.cmd_deactivate({"alias_id": a["anonymousId"]})
-        else:
-            fn = lambda: self.backend.cmd_reactivate({"alias_id": a["anonymousId"]})
-        self.run(fn, lambda _: self.reload(), on_error=self.reload)
+        self.set_active([a], not a.get("isActive", True))
 
-    def delete_alias(self):
-        a = self.current()
-        box = QMessageBox(QMessageBox.Warning, "Delete address",
-                          f"Permanently delete {a['hme']}?\n\nMail sent to it will bounce. This cannot be undone.",
-                          QMessageBox.Cancel, self)
-        box.addButton("Delete permanently", QMessageBox.DestructiveRole)
-        if box.exec() == QMessageBox.Cancel:
+    def copy_selected(self):
+        chosen = self.selected()
+        if chosen:
+            self.copy("\n".join(a["hme"] for a in chosen))
+
+    def list_menu(self, pos):
+        item = self.list.itemAt(pos)
+        if not item:
             return
-        params = {"alias_id": a["anonymousId"], "active": a.get("isActive", True)}
-        # On failure, reload anyway: deactivation may have succeeded before deleting failed.
-        self.run(lambda: self.backend.cmd_delete(params), lambda _: self.reload(), on_error=self.reload)
+        # Right-click acts on the whole selection when the clicked row is part of it.
+        targets = self.selected() if item.isSelected() else [item.data(Qt.UserRole)]
+        menu = QMenu(self)
+        menu.addAction("Copy address" if len(targets) == 1 else f"Copy {plural(len(targets))}",
+                       lambda: self.copy("\n".join(a["hme"] for a in targets)))
+        menu.addSeparator()
+        if any(a.get("isActive", True) for a in targets):
+            menu.addAction("Deactivate", lambda: self.set_active(targets, False))
+        if any(not a.get("isActive", True) for a in targets):
+            menu.addAction("Reactivate", lambda: self.set_active(targets, True))
+        menu.addAction("Delete…", lambda: self.ask_delete(targets, allow_deactivate=False))
+        menu.exec(self.list.viewport().mapToGlobal(pos))
+
+    def set_active(self, targets: list[dict], active: bool):
+        todo = [a for a in targets if a.get("isActive", True) != active]
+        command = self.backend.cmd_reactivate if active else self.backend.cmd_deactivate
+        self._batch(todo, "Reactivated" if active else "Deactivated",
+                    lambda a: command({"alias_id": a["anonymousId"]}))
+
+    def ask_delete(self, targets: list[dict], allow_deactivate: bool = True):
+        """Confirm deleting; from the Delete key, also offer the reversible Deactivate."""
+        if not targets:
+            return
+        what = targets[0]["hme"] if len(targets) == 1 else plural(len(targets))
+        box = QMessageBox(QMessageBox.Warning, "Delete",
+                          f"Permanently delete {what}?\n\nMail sent to it will bounce. This cannot be undone.",
+                          QMessageBox.Cancel, self)
+        delete = box.addButton("Delete permanently", QMessageBox.DestructiveRole)
+        deactivate = None
+        if allow_deactivate and any(a.get("isActive", True) for a in targets):
+            deactivate = box.addButton("Deactivate instead", QMessageBox.AcceptRole)
+        box.exec()
+        if box.clickedButton() is delete:
+            self._batch(targets, "Deleted", lambda a: self.backend.cmd_delete(
+                {"alias_id": a["anonymousId"], "active": a.get("isActive", True)}))
+        elif deactivate is not None and box.clickedButton() is deactivate:
+            self.set_active(targets, False)
+
+    def _batch(self, targets: list[dict], verb: str, call):
+        """Run one change per address in the background, keep going past failures, then reload."""
+        if not targets:
+            return
+
+        def work():
+            failures = []
+            for a in targets:
+                try:
+                    call(a)
+                except Exception as exc:
+                    failures.append(f"{a['hme']}: {exc}")
+            return failures
+
+        def ok(failures):
+            done = len(targets) - len(failures)
+            if done:
+                self.statusBar().showMessage(f"{verb} {plural(done)}", 3000)
+            self.reload()
+            if failures:
+                QMessageBox.warning(self, "Some changes failed", "\n\n".join(failures))
+
+        self.run(work, ok, on_error=self.reload)
 
     def export_csv(self):
         path, _ = QFileDialog.getSaveFileName(self, "Export", "Hide My Email.csv", "CSV files (*.csv)")
@@ -574,9 +845,11 @@ class MainWindow(QMainWindow):
 
 SAMPLE = [
     {"hme": "quiet-otter_7k@icloud.com", "label": "Netflix", "note": "Streaming account",
-     "isActive": True, "createTimestamp": 1761900000000, "anonymousId": "a", "forwardToEmail": "me@example.com"},
+     "isActive": True, "createTimestamp": 1761900000000, "anonymousId": "a", "forwardToEmail": "me@example.com",
+     "origin": "SAFARI", "domain": "netflix.com"},
     {"hme": "brisk-maple.2q@icloud.com", "label": "Bol.com", "note": "", "isActive": True,
-     "createTimestamp": 1758000000000, "anonymousId": "b", "forwardToEmail": "me@example.com"},
+     "createTimestamp": 1758000000000, "anonymousId": "b", "forwardToEmail": "me@example.com",
+     "origin": "ON_DEMAND"},
     {"hme": "lunar-pebble04@icloud.com", "label": "Old newsletter", "note": "", "isActive": False,
      "createTimestamp": 1740000000000, "anonymousId": "c", "forwardToEmail": "me@example.com"},
 ]
@@ -603,15 +876,37 @@ def selftest(out_dir: str) -> int:
 
     app = QApplication.instance() or QApplication(sys.argv)
     win = MainWindow(Backend())
+    win.setup_tray()
+    report.write(f"tray available: {win.tray is not None}\n")
+    report.write(f"global hotkey registered: {win.hotkey.registered}\n")
     win.toolbar.setVisible(True)
     win.stack.setCurrentWidget(win.main_page)
+    win.filter.setCurrentText("All")
     win.set_aliases(SAMPLE, select=SAMPLE[0]["hme"])
     win.show()
     app.processEvents()
+    assert win.d_origin.text() == "Safari — netflix.com", win.d_origin.text()
     win.grab().save(str(out / "screenshot.png"))
+
+    win.list.selectAll()
+    app.processEvents()
+    assert win.detail_stack.currentWidget() is win.batch and len(win.selected()) == 3
+    win.copy_selected()
+    assert QGuiApplication.clipboard().text().count("\n") == 2
+    win.grab().save(str(out / "batch.png"))
+
+    win.quick.popup()
+    app.processEvents()
+    win.quick.grab().save(str(out / "quick.png"))
     report.write("selftest ok\n")
     report.close()
+    # Keep Qt objects alive until the process is terminated: letting Python destroy
+    # the window and QApplication on return crashed Windows runs (access violation).
+    _KEEP_ALIVE.extend([app, win])
     return 0
+
+
+_KEEP_ALIVE: list = []
 
 
 def main() -> int:
@@ -642,6 +937,7 @@ def main() -> int:
     app.setApplicationName("Hide My Email")
     app.setStyle("Fusion") if sys.platform != "win32" else None
     win = MainWindow(Backend())
+    win.setup_tray()
     win.show()
     QTimer.singleShot(0, win.start)
     return app.exec()

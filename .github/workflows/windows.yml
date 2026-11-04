@@ -27,16 +27,43 @@ jobs:
           python-version: "3.13"
 
       - name: Install dependencies
-        run: pip install -r windows/requirements.txt
+        run: pip install -r windows/requirements.txt pillow
+
+      - name: Make app icon
+        run: python windows/make_icon.py build/icon.ico
 
       - name: Build HideMyEmail.exe
         shell: pwsh
-        run: pyinstaller $env:PYI_ARGS.Split(" ") --windowed --disable-windowed-traceback --name HideMyEmail windows/hide_my_email.py
+        run: pyinstaller $env:PYI_ARGS.Split(" ") --windowed --disable-windowed-traceback --icon build/icon.ico --name HideMyEmail windows/hide_my_email.py
+
+      - name: Build installer
+        shell: pwsh
+        env:
+          APP_VERSION: 1.0.${{ github.run_number }}
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup --no-progress -y | Out-Null }
+          & $iscc /Qp windows\installer.iss
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
+
+      - name: Test the installer
+        shell: pwsh
+        run: |
+          $p = Start-Process dist\HideMyEmail-Setup.exe -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Installer exited with $($p.ExitCode)" }
+          $exe = "$env:LOCALAPPDATA\Programs\Hide My Email\HideMyEmail.exe"
+          $lnk = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Hide My Email.lnk"
+          if (-not (Test-Path $exe)) { throw "App not installed at $exe" }
+          if (-not (Test-Path $lnk)) { throw "No Start-menu shortcut at $lnk" }
+          "Installed: $exe"
+          "Start-menu shortcut: $lnk"
 
       - uses: actions/upload-artifact@v4
         with:
           name: HideMyEmail-windows
-          path: dist/HideMyEmail.exe
+          path: |
+            dist/HideMyEmail.exe
+            dist/HideMyEmail-Setup.exe
 
       - name: Self-test the .exe
         timeout-minutes: 5

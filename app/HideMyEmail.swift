@@ -2,6 +2,7 @@
 // The iCloud work is done by hme_helper.py (pyicloud) running as a child process.
 
 import AppKit
+import Carbon.HIToolbox
 import SwiftUI
 
 // MARK: - Model
@@ -14,6 +15,8 @@ struct Alias: Identifiable, Hashable {
     var isActive: Bool
     let created: Date?
     let forwardTo: String
+    /// Where the address was made: "Safari — example.com", "Created by hand", or an app name.
+    let origin: String
 
     init(_ d: [String: Any]) {
         id = d["anonymousId"] as? String ?? UUID().uuidString
@@ -27,6 +30,19 @@ struct Alias: Identifiable, Hashable {
             created = nil
         }
         forwardTo = d["forwardToEmail"] as? String ?? ""
+
+        let kind = d["origin"] as? String ?? ""
+        let domain = d["domain"] as? String ?? ""
+        let appName = d["originAppName"] as? String ?? ""
+        var source: String
+        switch kind {
+        case "SAFARI": source = "Safari"
+        case "ON_DEMAND": source = "Created by hand"
+        case "": source = ""
+        default: source = appName.isEmpty ? kind.capitalized : appName
+        }
+        if !domain.isEmpty { source = source.isEmpty ? domain : "\(source) — \(domain)" }
+        origin = source
     }
 }
 
@@ -134,7 +150,10 @@ final class Helper {
 
 // MARK: - App state
 
-enum Phase { case starting, login, twoFactor, securityKey, ready, fatal(String) }
+enum Phase {
+    case starting, login, twoFactor, securityKey, ready, fatal(String)
+    var isReady: Bool { if case .ready = self { return true } else { return false } }
+}
 
 enum Filter: String, CaseIterable, Identifiable {
     case active = "Active", inactive = "Inactive", all = "All"
@@ -161,6 +180,9 @@ enum SortOrder: String, CaseIterable, Identifiable {
 
 @MainActor
 final class AppModel: ObservableObject {
+    /// Shared by the main window, the menu bar extra and the hotkey panel.
+    static let shared = AppModel()
+
     @Published var phase: Phase = .starting
     @Published var appleId = ""
     @Published var aliases: [Alias] = []
@@ -171,10 +193,11 @@ final class AppModel: ObservableObject {
     @Published var sort: SortOrder = SortOrder(rawValue: UserDefaults.standard.string(forKey: "sort") ?? "") ?? .newest {
         didSet { UserDefaults.standard.set(sort.rawValue, forKey: "sort") }
     }
-    @Published var selection: Alias.ID?
+    @Published var selection: Set<Alias.ID> = []
     @Published var toast: String?
 
     private var helper: Helper?
+    private var started = false
 
     var visible: [Alias] {
         aliases
@@ -190,13 +213,21 @@ final class AppModel: ObservableObject {
                     || $0.address.localizedCaseInsensitiveContains(search)
                     || $0.label.localizedCaseInsensitiveContains(search)
                     || $0.note.localizedCaseInsensitiveContains(search)
+                    || $0.origin.localizedCaseInsensitiveContains(search)
             }
             .sorted(by: sort.inOrder)
     }
 
-    var selected: Alias? { aliases.first { $0.id == selection } }
+    /// Selected addresses, in list order.
+    var selectedAliases: [Alias] { visible.filter { selection.contains($0.id) } }
+
+    /// The selected address when exactly one is selected.
+    var selected: Alias? { selection.count == 1 ? aliases.first { selection.contains($0.id) } : nil }
 
     func start() async {
+        // The window, menu bar panel and hotkey panel all call this; connect once.
+        guard !started else { return }
+        started = true
         do {
             helper = try Helper()
             let status = try await helper!.call("status") as? [String: Any] ?? [:]
@@ -270,10 +301,26 @@ final class AppModel: ObservableObject {
             _ = try await self.helper!.call("reserve", ["hme": address, "label": label, "note": note])
             try await self.reloadThrowing()
             self.copy(address)
-            self.selection = self.aliases.first { $0.address == address }?.id
+            self.selection = Set(self.aliases.filter { $0.address == address }.map(\.id))
             ok = true
         }
         return ok
+    }
+
+    /// Generate, reserve and copy a new address in one go (menu bar and hotkey panel).
+    /// Throws instead of showing the main window's alert, which may not be open.
+    func quickCreate(label: String) async throws -> String {
+        guard phase.isReady, let helper else {
+            throw HelperFailure(message: "Open Hide My Email and sign in first.")
+        }
+        let generated = try await helper.call("generate") as? [String: Any]
+        guard let address = generated?["hme"] as? String else {
+            throw HelperFailure(message: "iCloud did not generate an address.")
+        }
+        _ = try await helper.call("reserve", ["hme": address, "label": label, "note": ""])
+        copy(address)
+        try? await reloadThrowing()
+        return address
     }
 
     func save(_ alias: Alias, label: String, note: String) async {
@@ -284,30 +331,41 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func setActive(_ alias: Alias, _ active: Bool) async {
-        await run {
+    func setActive(_ targets: [Alias], _ active: Bool) async {
+        let todo = targets.filter { $0.isActive != active }
+        await batch(todo, verb: active ? "Reactivated" : "Deactivated") { alias in
             _ = try await self.helper!.call(active ? "reactivate" : "deactivate", ["alias_id": alias.id])
-            try await self.reloadThrowing()
-        } onError: {
-            Task { try? await self.reloadThrowing() }
         }
     }
 
-    func delete(_ alias: Alias) async {
-        await run {
+    func delete(_ targets: [Alias]) async {
+        await batch(targets, verb: "Deleted") { alias in
             _ = try await self.helper!.call("delete", ["alias_id": alias.id, "active": alias.isActive])
-            self.selection = nil
+            self.selection.remove(alias.id)
+        }
+    }
+
+    /// Run one helper call per address, keep going past failures, then reload once.
+    private func batch(_ targets: [Alias], verb: String, _ work: @escaping (Alias) async throws -> Void) async {
+        guard !targets.isEmpty else { return }
+        await run {
+            var failures: [String] = []
+            for alias in targets {
+                do { try await work(alias) } catch { failures.append("\(alias.address): \(error.localizedDescription)") }
+            }
             try await self.reloadThrowing()
-        } onError: {
-            // Deactivation may have succeeded even though deleting failed.
-            Task { try? await self.reloadThrowing() }
+            let done = targets.count - failures.count
+            if done > 0 { self.flash("\(verb) \(done) address\(done == 1 ? "" : "es")") }
+            if !failures.isEmpty {
+                throw HelperFailure(message: failures.joined(separator: "\n\n"))
+            }
         }
     }
 
     func copy(_ text: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
-        flash("Copied \(text)")
+        flash(text.contains("\n") ? "Copied \(text.split(separator: "\n").count) addresses" : "Copied \(text)")
     }
 
     func exportCSV() {
@@ -454,51 +512,81 @@ struct SecurityKeyView: View {
 struct MainView: View {
     @EnvironmentObject var model: AppModel
     @State private var showingNew = false
+    @State private var pendingDelete: [Alias] = []
 
     var body: some View {
         NavigationSplitView {
             List(model.visible, selection: $model.selection) { alias in
                 AliasRow(alias: alias)
-                    .contextMenu {
-                        Button("Copy Address") { model.copy(alias.address) }
-                    }
+                    .contextMenu { rowMenu(for: alias) }
             }
+            // ⌘C copies the selected addresses; Delete asks what to do with them.
+            .onCopyCommand {
+                model.selectedAliases.isEmpty ? [] : [NSItemProvider(object: model.selectedAliases.map(\.address).joined(separator: "\n") as NSString)]
+            }
+            .onDeleteCommand { pendingDelete = model.selectedAliases }
             .overlay {
                 if model.visible.isEmpty && !model.busy {
                     ContentUnavailableView.search(text: model.search)
                 }
             }
             .navigationSplitViewColumnWidth(min: 300, ideal: 360)
-            .safeAreaInset(edge: .top) {
-                HStack {
-                    Spacer()
-                    Menu {
-                        Picker("Sort By", selection: $model.sort) {
-                            ForEach(SortOrder.allCases) { Text($0.rawValue).tag($0) }
+            .safeAreaInset(edge: .top, spacing: 0) {
+                VStack(spacing: 0) {
+                    HStack {
+                        Spacer()
+                        Menu {
+                            Picker("Sort By", selection: $model.sort) {
+                                ForEach(SortOrder.allCases) { Text($0.rawValue).tag($0) }
+                            }
+                            .pickerStyle(.inline)
+                        } label: {
+                            Label(model.sort.rawValue, systemImage: "arrow.up.arrow.down")
+                                .font(.callout)
                         }
-                        .pickerStyle(.inline)
-                    } label: {
-                        Label(model.sort.rawValue, systemImage: "arrow.up.arrow.down")
-                            .font(.callout)
+                        .menuStyle(.borderlessButton)
+                        .fixedSize()
+                        .help("Sort addresses")
                     }
-                    .menuStyle(.borderlessButton)
-                    .fixedSize()
-                    .help("Sort addresses")
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 5)
+                    Divider()
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 4)
+                .background(.bar)
             }
-            .safeAreaInset(edge: .bottom) {
-                Text("\(model.visible.count) of \(model.aliases.count) addresses")
-                    .font(.caption).foregroundStyle(.secondary).padding(6)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                VStack(spacing: 0) {
+                    Divider()
+                    Text(model.selection.count > 1
+                         ? "\(model.selection.count) selected · \(model.visible.count) of \(model.aliases.count) addresses"
+                         : "\(model.visible.count) of \(model.aliases.count) addresses")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                }
+                .background(.bar)
             }
         } detail: {
             if let alias = model.selected {
                 AliasDetail(alias: alias).id(alias.id)
+            } else if model.selection.count > 1 {
+                BatchDetail(aliases: model.selectedAliases, onDelete: { pendingDelete = $0 })
             } else {
                 ContentUnavailableView("No address selected", systemImage: "envelope",
-                                       description: Text("Pick an address, or press ⌘N to create one."))
+                                       description: Text("Pick an address, or press ⌘N to create one.\n⌘-click or ⇧-click to select several."))
             }
+        }
+        .confirmationDialog(deleteTitle, isPresented: Binding(
+            get: { !pendingDelete.isEmpty },
+            set: { if !$0 { pendingDelete = [] } }
+        )) {
+            let targets = pendingDelete
+            if targets.contains(where: \.isActive) {
+                Button("Deactivate") { Task { await model.setActive(targets, false) } }
+            }
+            Button("Delete Permanently", role: .destructive) { Task { await model.delete(targets) } }
+        } message: {
+            Text("Deactivating stops forwarding but keeps the address. Deleting removes it for good: mail sent to it will bounce.")
         }
         .searchable(text: $model.search, placement: .sidebar, prompt: "Search address, label, note")
         .toolbar {
@@ -532,6 +620,51 @@ struct MainView: View {
             }
         }
         .animation(.easeInOut, value: model.toast)
+    }
+
+    private var deleteTitle: String {
+        pendingDelete.count == 1 ? pendingDelete[0].address : "\(pendingDelete.count) addresses"
+    }
+
+    /// Right-click acts on the whole selection when the clicked row is part of it.
+    @ViewBuilder private func rowMenu(for alias: Alias) -> some View {
+        let targets = model.selection.contains(alias.id) ? model.selectedAliases : [alias]
+        Button(targets.count == 1 ? "Copy Address" : "Copy \(targets.count) Addresses") {
+            model.copy(targets.map(\.address).joined(separator: "\n"))
+        }
+        Divider()
+        if targets.contains(where: \.isActive) {
+            Button("Deactivate") { Task { await model.setActive(targets, false) } }
+        }
+        if targets.contains(where: { !$0.isActive }) {
+            Button("Reactivate") { Task { await model.setActive(targets, true) } }
+        }
+        Button("Delete…", role: .destructive) { pendingDelete = targets }
+    }
+}
+
+struct BatchDetail: View {
+    @EnvironmentObject var model: AppModel
+    let aliases: [Alias]
+    let onDelete: ([Alias]) -> Void
+
+    var body: some View {
+        let active = aliases.filter(\.isActive).count
+        VStack(spacing: 18) {
+            Image(systemName: "square.stack.3d.up").font(.system(size: 44)).foregroundStyle(.tint)
+            Text("\(aliases.count) addresses selected").font(.title2.bold())
+            Text("\(active) active, \(aliases.count - active) inactive").foregroundStyle(.secondary)
+            HStack {
+                Button("Copy All") { model.copy(aliases.map(\.address).joined(separator: "\n")) }
+                Button("Deactivate") { Task { await model.setActive(aliases, false) } }.disabled(active == 0)
+                Button("Reactivate") { Task { await model.setActive(aliases, true) } }.disabled(active == aliases.count)
+                Button("Delete…", role: .destructive) { onDelete(aliases) }
+            }
+            .disabled(model.busy)
+            if model.busy { ProgressView().controlSize(.small) }
+        }
+        .padding(40)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -575,6 +708,7 @@ struct AliasDetail: View {
                 if let created = alias.created {
                     LabeledContent("Created", value: created.formatted(date: .long, time: .shortened))
                 }
+                if !alias.origin.isEmpty { LabeledContent("Created from", value: alias.origin) }
             }
             Section("Details") {
                 TextField("Label", text: $label)
@@ -590,9 +724,9 @@ struct AliasDetail: View {
             Section {
                 HStack {
                     if alias.isActive {
-                        Button("Deactivate") { Task { await model.setActive(alias, false) } }
+                        Button("Deactivate") { Task { await model.setActive([alias], false) } }
                     } else {
-                        Button("Reactivate") { Task { await model.setActive(alias, true) } }
+                        Button("Reactivate") { Task { await model.setActive([alias], true) } }
                     }
                     Spacer()
                     Button("Delete…", role: .destructive) { confirmDelete = true }
@@ -606,7 +740,7 @@ struct AliasDetail: View {
         .formStyle(.grouped)
         .onAppear { label = alias.label; note = alias.note }
         .confirmationDialog("Delete \(alias.address)?", isPresented: $confirmDelete) {
-            Button("Delete Permanently", role: .destructive) { Task { await model.delete(alias) } }
+            Button("Delete Permanently", role: .destructive) { Task { await model.delete([alias]) } }
         } message: {
             Text("Mail sent to this address will bounce. This cannot be undone.")
         }
@@ -664,11 +798,132 @@ struct NewAliasSheet: View {
     }
 }
 
+// MARK: - Quick create (menu bar and global hotkey)
+
+struct QuickCreateView: View {
+    @EnvironmentObject var model: AppModel
+    @Environment(\.openWindow) private var openWindow
+    var onDone: () -> Void = {}
+    @State private var label = ""
+    @State private var working = false
+    @State private var created: String?
+    @State private var error: String?
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("New Hide My Email address").font(.headline)
+            TextField("What's it for? e.g. Netflix", text: $label)
+                .textFieldStyle(.roundedBorder)
+                .focused($focused)
+                .onSubmit(create)
+                .disabled(working)
+            HStack {
+                if working {
+                    ProgressView().controlSize(.small)
+                    Text("Creating…").foregroundStyle(.secondary)
+                } else if let created {
+                    Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                    Text(created).font(.callout.monospaced()).textSelection(.enabled)
+                    Text("copied").foregroundStyle(.secondary)
+                } else if let error {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    Text(error).font(.callout).fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Text("Press Return to create it and copy it.").font(.callout).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+            .frame(minHeight: 20)
+            Divider()
+            HStack {
+                Button("Open Hide My Email") {
+                    openWindow(id: "main")
+                    NSApp.activate(ignoringOtherApps: true)
+                    onDone()
+                }
+                Spacer()
+                Text("⌃⌥⌘H").font(.caption).foregroundStyle(.secondary).help("Global shortcut for this panel")
+                Button("Quit") { NSApp.terminate(nil) }
+            }
+            .buttonStyle(.borderless)
+        }
+        .padding(14)
+        .frame(width: 340)
+        .task { await model.start() }
+        .onAppear { focused = true }
+    }
+
+    private func create() {
+        let text = label.trimmingCharacters(in: .whitespaces)
+        guard !text.isEmpty, !working else { return }
+        working = true
+        error = nil
+        created = nil
+        Task {
+            do {
+                created = try await model.quickCreate(label: text)
+                label = ""
+            } catch {
+                self.error = error.localizedDescription
+            }
+            working = false
+        }
+    }
+}
+
+/// A floating panel with QuickCreateView, shown by the global hotkey from any app.
+@MainActor
+final class QuickPanel {
+    static let shared = QuickPanel()
+    private var panel: NSPanel?
+    private var hotKey: EventHotKeyRef?
+
+    func registerHotKey() {
+        var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+        InstallEventHandler(GetApplicationEventTarget(), { _, _, _ in
+            DispatchQueue.main.async { QuickPanel.shared.toggle() }
+            return noErr
+        }, 1, &spec, nil, nil)
+        let id = EventHotKeyID(signature: OSType(0x484D_4531), id: 1)  // "HME1"
+        RegisterEventHotKey(UInt32(kVK_ANSI_H), UInt32(controlKey | optionKey | cmdKey), id,
+                            GetApplicationEventTarget(), 0, &hotKey)
+    }
+
+    func toggle() {
+        if let panel, panel.isVisible { panel.orderOut(nil); return }
+        let panel = self.panel ?? makePanel()
+        self.panel = panel
+        // Fresh view each time, so the field is empty and focused.
+        panel.contentView = NSHostingView(rootView: QuickCreateView(onDone: { [weak panel] in panel?.orderOut(nil) })
+            .environmentObject(AppModel.shared))
+        panel.center()
+        NSApp.activate(ignoringOtherApps: true)
+        panel.makeKeyAndOrderFront(nil)
+    }
+
+    private func makePanel() -> NSPanel {
+        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 340, height: 170),
+                            styleMask: [.titled, .closable, .fullSizeContentView],
+                            backing: .buffered, defer: false)
+        panel.title = "Hide My Email"
+        panel.titlebarAppearsTransparent = true
+        panel.level = .floating
+        panel.isReleasedWhenClosed = false
+        panel.hidesOnDeactivate = true
+        return panel
+    }
+}
+
 // MARK: - App
 
 @main
 struct HideMyEmailApp: App {
-    @StateObject private var model = AppModel()
+    @StateObject private var model = AppModel.shared
+
+    init() {
+        QuickPanel.shared.registerHotKey()
+    }
 
     var body: some Scene {
         Window("Hide My Email", id: "main") {
@@ -677,5 +932,10 @@ struct HideMyEmailApp: App {
                 .frame(minWidth: 760, minHeight: 480)
         }
         .windowToolbarStyle(.unified)
+
+        MenuBarExtra("Hide My Email", systemImage: "envelope.badge.shield.half.filled") {
+            QuickCreateView().environmentObject(model)
+        }
+        .menuBarExtraStyle(.window)
     }
 }

@@ -23,8 +23,13 @@ Enter your Apple ID password and the 2FA code that appears on your iPhone or Mac
 - Sign in with your Apple ID and 2FA code. If you've already logged in with the `hme` command, the app signs in automatically.
 - Search your addresses, switch between Active, Inactive and All, and sort by newest, oldest or name.
 - Press ⌘N to create a new address. You can generate a different one before you confirm, and it's copied to the clipboard when created.
-- Edit an address's label and note, copy it, deactivate or reactivate it, or delete it.
+- Edit an address's label and note, copy it, deactivate or reactivate it, or delete it. The details also show where the address was created (Safari and the website, by hand, or an app), and search covers that too.
+- ⌘-click or ⇧-click to select several addresses, then copy, deactivate, reactivate or delete them together. Right-click works on the selection too.
+- Keyboard: ⌘C copies the selected addresses, Delete offers to deactivate or delete them, and the arrow keys move through the list.
+- **Menu bar:** click the envelope icon in the menu bar, or press **⌃⌥⌘H** from any app, type what the address is for and press Return. The new address is created and copied to the clipboard, without opening the main window.
 - Export everything to CSV, or sign out, from the ⋯ menu.
+
+Note: iCloud doesn't allow editing the label or note of an inactive address. Reactivate it first.
 
 The app is a SwiftUI front end. A background helper (`hme_helper.py`) does the iCloud work, using the same Python environment as the command-line tool. To rebuild only the app, run `app/build.sh`.
 
@@ -33,13 +38,17 @@ The app is a SwiftUI front end. A background helper (`hme_helper.py`) does the i
 `windows/hide_my_email.py` is a Qt (PySide6) version of the app, with the same features. GitHub Actions builds it into a single `HideMyEmail.exe` on every push to `main`, using `.github/workflows/windows.yml`. To get the latest build:
 
 1. Open the repository on GitHub and go to **Actions → Build Windows app**.
-2. Open the latest run and download the **HideMyEmail-windows** artifact. It's a zip containing the `.exe`.
+2. Open the latest run and download the **HideMyEmail-windows** artifact. It's a zip with two files:
+   - `HideMyEmail-Setup.exe`, the installer (recommended). It installs for your user only, with no admin rights needed, adds a Start-menu shortcut, and offers a desktop shortcut and a "start when I sign in" option. You can uninstall it from Settings → Apps.
+   - `HideMyEmail.exe`, the app on its own, which runs without installing.
 
-The `.exe` is unsigned, so Windows SmartScreen warns about it the first time. Click **More info → Run anyway**.
+Both files are unsigned, so Windows SmartScreen warns about them the first time. Click **More info → Run anyway**. Removing the warning would need a paid code-signing certificate.
+
+The Windows app has the same features as the Mac app, including multi-select, Ctrl+C, Delete and a right-click menu. Instead of the menu bar it uses a **tray icon**: click it, or press **Ctrl+Alt+Shift+H** from any app, for the quick-create window. Closing the main window keeps the app running in the tray. To quit, right-click the tray icon.
 
 On Windows, your password is stored in Credential Manager and the session in `%APPDATA%\HideMyEmail`.
 
-Each build also runs `HideMyEmail.exe --selftest`, which checks that everything the app needs is packaged. It saves a screenshot of the app rendered on Windows in the **selftest** artifact.
+Each build also runs `HideMyEmail.exe --selftest`, which checks that everything the app needs is packaged. It saves screenshots of the app rendered on Windows (main window, multi-select, quick-create) in the **selftest** artifact. The build also test-installs the installer.
 
 ## Command line usage
 
