@@ -378,9 +378,13 @@ class MainWindow(QMainWindow):
         lv = QVBoxLayout(left)
         top = QHBoxLayout()
         top.addWidget(self.search, 1)
-        top.addWidget(self.filter)
-        top.addWidget(self.sort)
+        options = QHBoxLayout()
+        options.addWidget(self.filter)
+        options.addStretch()
+        options.addWidget(QLabel("Sort:"))
+        options.addWidget(self.sort)
         lv.addLayout(top)
+        lv.addLayout(options)
         lv.addWidget(self.list, 1)
         lv.addWidget(self.count)
 
@@ -607,9 +611,6 @@ def selftest(out_dir: str) -> int:
     win.grab().save(str(out / "screenshot.png"))
     report.write("selftest ok\n")
     report.close()
-    win.close()
-    del win
-    app.processEvents()
     return 0
 
 
@@ -628,8 +629,14 @@ def main() -> int:
                 f.write("CRASH:\n" + traceback.format_exc())
             code = 2
         faulthandler.cancel_dump_traceback_later()
-        # Exit hard: no error dialog that could hang a headless runner.
         sys.stdout.flush()
+        # Exit hard: no error dialog that could hang a headless runner. On Windows,
+        # skip DLL unload too, where Qt can crash after the test already passed.
+        if sys.platform == "win32":
+            import ctypes
+
+            k32 = ctypes.windll.kernel32
+            k32.TerminateProcess(k32.GetCurrentProcess(), code)
         os._exit(code)
     app = QApplication(sys.argv)
     app.setApplicationName("Hide My Email")
