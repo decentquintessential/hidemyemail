@@ -469,6 +469,25 @@ struct MainView: View {
                 }
             }
             .navigationSplitViewColumnWidth(min: 300, ideal: 360)
+            .safeAreaInset(edge: .top) {
+                HStack {
+                    Spacer()
+                    Menu {
+                        Picker("Sort By", selection: $model.sort) {
+                            ForEach(SortOrder.allCases) { Text($0.rawValue).tag($0) }
+                        }
+                        .pickerStyle(.inline)
+                    } label: {
+                        Label(model.sort.rawValue, systemImage: "arrow.up.arrow.down")
+                            .font(.callout)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .help("Sort addresses")
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4)
+            }
             .safeAreaInset(edge: .bottom) {
                 Text("\(model.visible.count) of \(model.aliases.count) addresses")
                     .font(.caption).foregroundStyle(.secondary).padding(6)
@@ -495,13 +514,6 @@ struct MainView: View {
                     .keyboardShortcut("r")
                 Button { showingNew = true } label: { Label("New Address", systemImage: "plus") }
                     .keyboardShortcut("n")
-                Menu {
-                    Picker("Sort By", selection: $model.sort) {
-                        ForEach(SortOrder.allCases) { Text($0.rawValue).tag($0) }
-                    }
-                    .pickerStyle(.inline)
-                } label: { Label("Sort", systemImage: "arrow.up.arrow.down") }
-                    .help("Sort addresses")
                 Menu {
                     Button("Export to CSV…") { model.exportCSV() }
                     Divider()
