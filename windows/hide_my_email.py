@@ -11,6 +11,18 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+if "--selftest" in sys.argv:
+    # Dump every thread's stack if startup hangs, so a CI run shows where.
+    import faulthandler
+
+    _i = sys.argv.index("--selftest")
+    _dir = Path(sys.argv[_i + 1] if len(sys.argv) > _i + 1 else "selftest")
+    _dir.mkdir(parents=True, exist_ok=True)
+    _trace = (_dir / "trace.txt").open("w")
+    _trace.write("started\n")
+    _trace.flush()
+    faulthandler.dump_traceback_later(60, exit=True, file=_trace)
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, QTimer, Signal

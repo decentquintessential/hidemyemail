@@ -36,6 +36,29 @@ jobs:
           name: HideMyEmail-windows
           path: dist/HideMyEmail.exe
 
+      - name: Diagnose - self-test from source
+        if: always()
+        timeout-minutes: 3
+        shell: pwsh
+        run: |
+          $p = Start-Process python -ArgumentList "windows/hide_my_email.py", "--selftest", "diag-source" -PassThru -NoNewWindow -RedirectStandardError diag-source-err.txt
+          if (-not $p.WaitForExit(90000)) { Stop-Process -Id $p.Id -Force; "TIMEOUT" }
+          "exit: $($p.ExitCode)"
+          Get-Content diag-source\*.txt -ErrorAction SilentlyContinue
+          Get-Content diag-source-err.txt -ErrorAction SilentlyContinue
+
+      - name: Diagnose - console build
+        if: always()
+        timeout-minutes: 6
+        shell: pwsh
+        run: |
+          pyinstaller --noconfirm --onefile --console --name HideMyEmailDebug --paths . --collect-submodules pyicloud --collect-submodules keyring.backends --copy-metadata pyicloud --copy-metadata keyring --distpath dist-debug windows/hide_my_email.py *> $null
+          $p = Start-Process dist-debug\HideMyEmailDebug.exe -ArgumentList "--selftest", "diag-exe" -PassThru -NoNewWindow -RedirectStandardOutput diag-exe-out.txt -RedirectStandardError diag-exe-err.txt
+          if (-not $p.WaitForExit(90000)) { Stop-Process -Id $p.Id -Force; "TIMEOUT" }
+          "exit: $($p.ExitCode)"
+          Get-Content diag-exe\*.txt -ErrorAction SilentlyContinue
+          Get-Content diag-exe-out.txt, diag-exe-err.txt -ErrorAction SilentlyContinue
+
       - name: Self-test the .exe
         timeout-minutes: 5
         shell: pwsh
