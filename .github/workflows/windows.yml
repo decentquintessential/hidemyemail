@@ -8,6 +8,12 @@ on:
     paths-ignore: ["README.md", "docs/**"]  # documentation changes don't need a new release
   workflow_dispatch:
 
+# A newer push supersedes an older build: cancel the older one so it can't publish
+# a lower version as "Latest" after the newer release.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   APP_VERSION: 1.0.${{ github.run_number }}
   PYI_ARGS: >-
