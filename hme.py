@@ -20,6 +20,8 @@ from pathlib import Path
 from typing import Any
 
 from pyicloud import PyiCloudService
+
+from hme_helper import with_retry
 from pyicloud.exceptions import PyiCloudFailedLoginException
 from pyicloud.utils import (
     delete_password_in_keyring,
@@ -120,7 +122,7 @@ def fmt_date(ms: Any) -> str:
 
 
 def fetch_all(api) -> list[dict[str, Any]]:
-    return list(api.hidemyemail)
+    return with_retry(lambda: list(api.hidemyemail))
 
 
 def find_alias(aliases: list[dict[str, Any]], query: str) -> dict[str, Any]:
@@ -224,10 +226,10 @@ def cmd_list(args) -> None:
 
 def cmd_new(args) -> None:
     api, *_ = connect()
-    email = api.hidemyemail.generate()
+    email = with_retry(api.hidemyemail.generate)
     if not email:
         raise HmeError("iCloud did not generate an address (limit reached?).")
-    result = api.hidemyemail.reserve(email, args.label, args.note or "")
+    result = with_retry(lambda: api.hidemyemail.reserve(email, args.label, args.note or ""))
     check_result(result, "Reserving the address")
     copied = copy_to_clipboard(email)
     print(email + ("   (copied to clipboard)" if copied else ""))
@@ -236,7 +238,9 @@ def cmd_new(args) -> None:
 def cmd_show(args) -> None:
     api, *_ = connect()
     alias = find_alias(fetch_all(api), args.query)
-    details = api.hidemyemail[alias["anonymousId"]] or alias
+    # The get endpoint wraps the alias as {"hme": {...}}.
+    fetched = with_retry(lambda: api.hidemyemail[alias["anonymousId"]])
+    details = fetched.get("hme") if isinstance(fetched.get("hme"), dict) else (fetched or alias)
     if args.json:
         print(json.dumps(details, indent=2))
         return
@@ -260,7 +264,7 @@ def cmd_edit(args) -> None:
     alias = find_alias(fetch_all(api), args.query)
     label = args.label if args.label is not None else alias.get("label") or ""
     note = args.note if args.note is not None else alias.get("note")
-    result = api.hidemyemail.update_metadata(alias["anonymousId"], label, note)
+    result = with_retry(lambda: api.hidemyemail.update_metadata(alias["anonymousId"], label, note))
     check_result(result, "Update")
     print(f"Updated {alias['hme']}.")
 
@@ -280,7 +284,7 @@ def cmd_deactivate(args) -> None:
         return
     if not confirm(f"Stop forwarding mail from {alias['hme']}?", args.yes):
         return
-    check_result(api.hidemyemail.deactivate(alias["anonymousId"]), "Deactivate")
+    check_result(with_retry(lambda: api.hidemyemail.deactivate(alias["anonymousId"])), "Deactivate")
     print(f"Deactivated {alias['hme']}.")
 
 
@@ -290,7 +294,7 @@ def cmd_reactivate(args) -> None:
     if alias.get("isActive", True):
         print(f"{alias['hme']} is already active.")
         return
-    check_result(api.hidemyemail.reactivate(alias["anonymousId"]), "Reactivate")
+    check_result(with_retry(lambda: api.hidemyemail.reactivate(alias["anonymousId"])), "Reactivate")
     print(f"Reactivated {alias['hme']}.")
 
 
@@ -305,8 +309,8 @@ def cmd_delete(args) -> None:
         return
     # iCloud only deletes addresses that are already deactivated.
     if alias.get("isActive", True):
-        check_result(api.hidemyemail.deactivate(alias["anonymousId"]), "Deactivate")
-    check_result(api.hidemyemail.delete(alias["anonymousId"]), "Delete")
+        check_result(with_retry(lambda: api.hidemyemail.deactivate(alias["anonymousId"])), "Deactivate")
+    check_result(with_retry(lambda: api.hidemyemail.delete(alias["anonymousId"])), "Delete")
     print(f"Deleted {alias['hme']}.")
 
 

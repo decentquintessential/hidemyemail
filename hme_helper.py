@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +40,24 @@ PROTOCOL_OUT = sys.stdout
 
 class HelperError(Exception):
     pass
+
+
+def with_retry(fn, attempts: int = 4):
+    """Call fn, retrying iCloud's transient "Something went wrong. Try again later" errors.
+
+    iCloud sometimes answers a Hide My Email change with errorCode 500 and a
+    retryAfter hint (seconds); the same call then succeeds a moment later.
+    """
+    for attempt in range(attempts):
+        try:
+            return fn()
+        except Exception as exc:
+            text = str(exc)
+            transient = '"errorCode":"500"' in text or "Try again later" in text
+            if not transient or attempt == attempts - 1:
+                raise
+            match = re.search(r'"retryAfter":\s*(\d+)', text)
+            time.sleep(max(int(match.group(1)) if match else 2, 2) * (attempt + 1))
 
 
 class Backend:
@@ -123,41 +143,50 @@ class Backend:
     # ------------------------------------------------------------ aliases
 
     def cmd_list(self, req) -> list[dict[str, Any]]:
-        return list(self._require_api().hidemyemail)
+        return with_retry(lambda: list(self._require_api().hidemyemail))
 
     def cmd_generate(self, req) -> dict[str, Any]:
-        email = self._require_api().hidemyemail.generate()
+        email = with_retry(self._require_api().hidemyemail.generate)
         if not email:
             raise HelperError("iCloud did not generate an address. You may have hit Apple's hourly limit.")
         return {"hme": email}
 
     def cmd_reserve(self, req) -> dict[str, Any]:
+        hme = self._require_api().hidemyemail
         return self._checked(
-            self._require_api().hidemyemail.reserve(req["hme"], req["label"], req.get("note") or ""),
-            "Creating the address",
+            lambda: hme.reserve(req["hme"], req["label"], req.get("note") or ""), "Creating the address"
         )
 
     def cmd_update(self, req) -> dict[str, Any]:
-        return self._checked(
-            self._require_api().hidemyemail.update_metadata(req["id"], req["label"], req.get("note")),
-            "Saving",
-        )
+        hme = self._require_api().hidemyemail
+        return self._checked(lambda: hme.update_metadata(req["id"], req["label"], req.get("note")), "Saving")
 
     def cmd_deactivate(self, req) -> dict[str, Any]:
-        return self._checked(self._require_api().hidemyemail.deactivate(req["id"]), "Deactivating")
+        hme = self._require_api().hidemyemail
+        return self._checked(lambda: hme.deactivate(req["id"]), "Deactivating")
 
     def cmd_reactivate(self, req) -> dict[str, Any]:
-        return self._checked(self._require_api().hidemyemail.reactivate(req["id"]), "Reactivating")
+        hme = self._require_api().hidemyemail
+        return self._checked(lambda: hme.reactivate(req["id"]), "Reactivating")
 
     def cmd_delete(self, req) -> dict[str, Any]:
         hme = self._require_api().hidemyemail
         # iCloud only deletes addresses that are already deactivated.
         if req.get("active"):
-            self._checked(hme.deactivate(req["id"]), "Deactivating")
-        return self._checked(hme.delete(req["id"]), "Deleting")
+            self._checked(lambda: hme.deactivate(req["id"]), "Deactivating")
+        return self._checked(lambda: hme.delete(req["id"]), "Deleting")
 
     @staticmethod
-    def _checked(result: dict[str, Any], what: str) -> dict[str, Any]:
+    def _checked(call, what: str) -> dict[str, Any]:
+        try:
+            result = with_retry(call)
+        except Exception as exc:
+            if "Try again later" not in str(exc):
+                raise
+            raise HelperError(
+                f"{what} failed: iCloud kept answering \"try again later\". "
+                "Wait a minute and try again."
+            ) from exc
         if not result:
             raise HelperError(f"{what} failed (iCloud returned no result).")
         return result

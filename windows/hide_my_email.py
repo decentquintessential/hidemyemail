@@ -515,7 +515,7 @@ class MainWindow(QMainWindow):
             fn = lambda: self.backend.cmd_deactivate({"id": a["anonymousId"]})
         else:
             fn = lambda: self.backend.cmd_reactivate({"id": a["anonymousId"]})
-        self.run(fn, lambda _: self.reload())
+        self.run(fn, lambda _: self.reload(), on_error=self.reload)
 
     def delete_alias(self):
         a = self.current()
@@ -526,7 +526,8 @@ class MainWindow(QMainWindow):
         if box.exec() == QMessageBox.Cancel:
             return
         params = {"id": a["anonymousId"], "active": a.get("isActive", True)}
-        self.run(lambda: self.backend.cmd_delete(params), lambda _: self.reload())
+        # On failure, reload anyway: deactivation may have succeeded before deleting failed.
+        self.run(lambda: self.backend.cmd_delete(params), lambda _: self.reload(), on_error=self.reload)
 
     def export_csv(self):
         path, _ = QFileDialog.getSaveFileName(self, "Export", "Hide My Email.csv", "CSV files (*.csv)")

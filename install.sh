@@ -8,7 +8,7 @@ BIN="$HOME/.local/bin"
 python3 -m venv "$VENV"
 "$VENV/bin/pip" install -q --upgrade pip
 "$VENV/bin/pip" install -q -r "$HERE/requirements.txt"
-cp "$HERE/hme.py" "$HOME/.local/share/hme/hme.py"
+cp "$HERE/hme.py" "$HERE/hme_helper.py" "$HOME/.local/share/hme/"
 
 mkdir -p "$BIN"
 cat > "$BIN/hme" <<EOF

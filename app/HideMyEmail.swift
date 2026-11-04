@@ -265,6 +265,8 @@ final class AppModel: ObservableObject {
         await run {
             _ = try await self.helper!.call(active ? "reactivate" : "deactivate", ["id": alias.id])
             try await self.reloadThrowing()
+        } onError: {
+            Task { try? await self.reloadThrowing() }
         }
     }
 
@@ -273,6 +275,9 @@ final class AppModel: ObservableObject {
             _ = try await self.helper!.call("delete", ["id": alias.id, "active": alias.isActive])
             self.selection = nil
             try await self.reloadThrowing()
+        } onError: {
+            // Deactivation may have succeeded even though deleting failed.
+            Task { try? await self.reloadThrowing() }
         }
     }
 
