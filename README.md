@@ -44,6 +44,8 @@ The installer is unsigned, so Windows SmartScreen warns about them the first tim
 
 The Windows app has the same features as the Mac app, including multi-select, Ctrl+C, Delete and a right-click menu. Instead of the menu bar it uses a **tray icon**: click it, or press **Ctrl+Alt+Shift+H** from any app, for the quick-create window. Closing the main window keeps the app running in the tray. To quit, right-click the tray icon.
 
+**Updates:** every build that passes its checks is published as a [release](https://github.com/decentquintessential/hidemyemail/releases), for example `v1.0.25`. The installed app checks for a newer release 10 seconds after it starts and every 6 hours, and you can also use **Check for updates** in the toolbar or the tray menu. When there's a new version, the app downloads it in the background and shows a bar: **Restart to update** installs it silently and reopens the app. The app's version is shown at the bottom right.
+
 On Windows, your password is stored in Credential Manager and the session in `%APPDATA%\HideMyEmail`.
 
 Each build also runs `HideMyEmail.exe --selftest`, which checks that everything the app needs is packaged. It saves screenshots of the app rendered on Windows (main window, multi-select, quick-create) in the **selftest** artifact. The build also test-installs the installer.

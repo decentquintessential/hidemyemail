@@ -48,7 +48,69 @@ from PySide6.QtWidgets import (
 
 from hme_helper import Backend
 
+try:
+    from _version import APP_VERSION  # written by the GitHub build
+except ImportError:
+    APP_VERSION = "0.0.0"  # running from source: no automatic updates
+
 ACCENT = "#3a6ff0"
+RELEASES_API = "https://api.github.com/repos/decentquintessential/hidemyemail/releases/latest"
+SETUP_ASSET = "HideMyEmail-Setup.exe"
+UPDATE_CHECK_HOURS = 6
+
+
+# ---------------------------------------------------------------- updates
+
+
+def parse_version(text: str) -> tuple[int, ...]:
+    try:
+        return tuple(int(part) for part in text.strip().lstrip("vV").split("."))
+    except ValueError:
+        return (0,)
+
+
+def find_update(current: str = APP_VERSION) -> dict | None:
+    """Return {"version", "url", "size"} when GitHub's latest release is newer, else None."""
+    import requests
+
+    response = requests.get(RELEASES_API, timeout=20, headers={
+        "Accept": "application/vnd.github+json", "User-Agent": f"HideMyEmail/{current}"})
+    if response.status_code == 404:  # no releases yet
+        return None
+    response.raise_for_status()
+    release = response.json()
+    version = release.get("tag_name", "").lstrip("vV")
+    if parse_version(version) <= parse_version(current):
+        return None
+    asset = next((a for a in release.get("assets", []) if a.get("name") == SETUP_ASSET), None)
+    if not asset:
+        return None
+    return {"version": version, "url": asset["browser_download_url"], "size": asset.get("size", 0)}
+
+
+def download_update(update: dict) -> Path:
+    """Download the installer to %TEMP%; checks the size GitHub reported."""
+    import tempfile
+
+    import requests
+
+    folder = Path(tempfile.gettempdir()) / "HideMyEmail-update"
+    folder.mkdir(exist_ok=True)
+    target = folder / f"HideMyEmail-Setup-{update['version']}.exe"
+    if target.exists() and target.stat().st_size == update["size"]:
+        return target
+    partial = target.with_suffix(".part")
+    with requests.get(update["url"], stream=True, timeout=60,
+                      headers={"User-Agent": f"HideMyEmail/{APP_VERSION}"}) as response:
+        response.raise_for_status()
+        with partial.open("wb") as f:
+            for chunk in response.iter_content(1 << 16):
+                f.write(chunk)
+    if update["size"] and partial.stat().st_size != update["size"]:
+        partial.unlink(missing_ok=True)
+        raise RuntimeError("The downloaded update was incomplete.")
+    partial.replace(target)
+    return target
 
 
 # ---------------------------------------------------------------- background work
@@ -348,7 +410,17 @@ class MainWindow(QMainWindow):
         self.resize(900, 580)
 
         self.stack = QStackedWidget()
-        self.setCentralWidget(self.stack)
+        self.update_bar = self._build_update_bar()
+        central = QWidget()
+        cv = QVBoxLayout(central)
+        cv.setContentsMargins(0, 0, 0, 0)
+        cv.setSpacing(0)
+        cv.addWidget(self.update_bar)
+        cv.addWidget(self.stack, 1)
+        self.setCentralWidget(central)
+        self.statusBar().addPermanentWidget(muted(f"Version {APP_VERSION}"))
+        self.update_ready: tuple[dict, Path] | None = None
+        self._quitting = False
         self.starting_page = centered(heading("Connecting to iCloud…", 14))
         self.login_page = self._build_login()
         self.code_page = self._build_code()
@@ -407,8 +479,9 @@ class MainWindow(QMainWindow):
         menu = QMenu()
         menu.addAction("New address…", self.quick.popup)
         menu.addAction("Open Hide My Email", self.bring_to_front)
+        menu.addAction("Check for updates", lambda: self.check_for_updates(manual=True))
         menu.addSeparator()
-        menu.addAction("Quit", QApplication.instance().quit)
+        menu.addAction("Quit", self.quit_app)
         self.tray = QSystemTrayIcon(app_icon(), self)
         self.tray.setToolTip(f"Hide My Email — {HOTKEY_TEXT} for a new address")
         self.tray.setContextMenu(menu)
@@ -418,8 +491,85 @@ class MainWindow(QMainWindow):
         QApplication.instance().setQuitOnLastWindowClosed(False)
         self._told_about_tray = False
 
+    def quit_app(self):
+        self._quitting = True
+        QApplication.instance().quit()
+
+    # ------------------------------------------------------------ updates
+
+    def _build_update_bar(self) -> QWidget:
+        bar = QWidget()
+        bar.setObjectName("updateBar")
+        bar.setStyleSheet("#updateBar { background: #e8f0fe; border-bottom: 1px solid #c6d7f7; }")
+        self.update_text = QLabel()
+        restart = QPushButton("Restart to update")
+        restart.setDefault(True)
+        restart.clicked.connect(self.install_update)
+        later = QPushButton("Later")
+        later.setFlat(True)
+        later.clicked.connect(bar.hide)
+        row = QHBoxLayout(bar)
+        row.setContentsMargins(12, 6, 12, 6)
+        row.addWidget(self.update_text, 1)
+        row.addWidget(later)
+        row.addWidget(restart)
+        bar.hide()
+        return bar
+
+    def start_update_checks(self):
+        """Check GitHub shortly after start and every few hours (only in released builds)."""
+        if parse_version(APP_VERSION) == (0, 0, 0):
+            return
+        QTimer.singleShot(10_000, self.check_for_updates)
+        self.update_timer = QTimer(self)
+        self.update_timer.timeout.connect(self.check_for_updates)
+        self.update_timer.start(UPDATE_CHECK_HOURS * 3600 * 1000)
+
+    def check_for_updates(self, manual: bool = False):
+        """Find and download a newer release in the background, then offer to install it."""
+        if self.update_ready:
+            self.show_update_ready()
+            return
+        job = _Job(lambda: (lambda u: (u, download_update(u)) if u else None)(find_update()))
+        self.jobs.add(job)
+
+        def done(result):
+            self.jobs.discard(job)
+            if result:
+                self.update_ready = result
+                self.show_update_ready()
+            elif manual:
+                QMessageBox.information(self, "No updates", f"You have the latest version ({APP_VERSION}).")
+
+        def failed(message):
+            self.jobs.discard(job)
+            if manual:  # automatic checks stay quiet, e.g. when offline
+                QMessageBox.warning(self, "Couldn't check for updates", message)
+
+        job.signals.done.connect(done)
+        job.signals.failed.connect(failed)
+        self.pool.start(job)
+
+    def show_update_ready(self):
+        version = self.update_ready[0]["version"]
+        self.update_text.setText(f"Hide My Email {version} is ready to install (you have {APP_VERSION}).")
+        self.update_bar.show()
+        if getattr(self, "tray", None) and not self.isVisible():
+            self.tray.showMessage("Update ready", f"Hide My Email {version} is ready. Open the app to install it.",
+                                  app_icon(), 5000)
+
+    def install_update(self):
+        """Run the downloaded installer silently; it reopens the app when done."""
+        import subprocess
+
+        _, installer = self.update_ready
+        flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        subprocess.Popen([str(installer), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/RELAUNCH=1"],
+                         creationflags=flags, close_fds=True)
+        self.quit_app()
+
     def closeEvent(self, event):
-        if getattr(self, "tray", None):
+        if getattr(self, "tray", None) and not self._quitting:
             event.ignore()
             self.hide()
             if not self._told_about_tray:
@@ -510,6 +660,7 @@ class MainWindow(QMainWindow):
             ("New address", QKeySequence.New, self.new_alias),
             ("Refresh", QKeySequence.Refresh, lambda: self.reload()),
             ("Export CSV…", None, self.export_csv),
+            ("Check for updates", None, lambda: self.check_for_updates(manual=True)),
             ("Sign out", None, self.sign_out),
         ):
             action = QAction(text, self)
@@ -879,6 +1030,14 @@ def selftest(out_dir: str) -> int:
     win.setup_tray()
     report.write(f"tray available: {win.tray is not None}\n")
     report.write(f"global hotkey registered: {win.hotkey.registered}\n")
+
+    report.write(f"version: {APP_VERSION}\n")
+    assert parse_version("v1.0.10") > parse_version("1.0.9") > parse_version("1.0") > parse_version("0.0.0")
+    try:  # live check against GitHub: pretend to be an old version
+        found = find_update("0.0.1")
+        report.write(f"latest release on GitHub: {found['version'] if found else 'none yet'}\n")
+    except Exception as exc:  # network trouble shouldn't fail the build
+        report.write(f"update check failed (not fatal): {exc}\n")
     win.toolbar.setVisible(True)
     win.stack.setCurrentWidget(win.main_page)
     win.filter.setCurrentText("All")
@@ -898,6 +1057,13 @@ def selftest(out_dir: str) -> int:
     win.quick.popup()
     app.processEvents()
     win.quick.grab().save(str(out / "quick.png"))
+    win.quick.hide()
+
+    win.update_ready = ({"version": "9.9.9"}, Path("setup.exe"))
+    win.show_update_ready()
+    app.processEvents()
+    assert win.update_bar.isVisible()
+    win.grab().save(str(out / "update.png"))
     report.write("selftest ok\n")
     report.close()
     # Keep Qt objects alive until the process is terminated: letting Python destroy
@@ -944,6 +1110,7 @@ def main() -> int:
     win.setup_tray()
     win.show()
     QTimer.singleShot(0, win.start)
+    win.start_update_checks()
     return app.exec()
 
 

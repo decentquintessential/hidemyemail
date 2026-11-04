@@ -40,3 +40,11 @@ Name: "{userstartup}\Hide My Email"; Filename: "{app}\HideMyEmail.exe"; Tasks: s
 
 [Run]
 Filename: "{app}\HideMyEmail.exe"; Description: "Open Hide My Email"; Flags: nowait postinstall skipifsilent
+; The app's updater runs this installer with /VERYSILENT /RELAUNCH=1 and quits; reopen it afterwards.
+Filename: "{app}\HideMyEmail.exe"; Flags: nowait; Check: ShouldRelaunch
+
+[Code]
+function ShouldRelaunch: Boolean;
+begin
+  Result := ExpandConstant('{param:RELAUNCH|0}') = '1';
+end;

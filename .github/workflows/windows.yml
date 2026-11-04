@@ -19,6 +19,10 @@ jobs:
   build:
     runs-on: windows-latest
     timeout-minutes: 20
+    permissions:
+      contents: write  # to publish the release the app updates from
+    env:
+      APP_VERSION: 1.0.${{ github.run_number }}
     steps:
       - uses: actions/checkout@v4
 
@@ -32,14 +36,16 @@ jobs:
       - name: Make app icon
         run: python windows/make_icon.py build/icon.ico
 
+      - name: Stamp version
+        shell: pwsh
+        run: Set-Content windows/_version.py "APP_VERSION = `"$env:APP_VERSION`""
+
       - name: Build HideMyEmail.exe
         shell: pwsh
         run: pyinstaller $env:PYI_ARGS.Split(" ") --windowed --disable-windowed-traceback --icon build/icon.ico --name HideMyEmail windows/hide_my_email.py
 
       - name: Build installer
         shell: pwsh
-        env:
-          APP_VERSION: 1.0.${{ github.run_number }}
         run: |
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) { choco install innosetup --no-progress -y | Out-Null }
@@ -57,6 +63,15 @@ jobs:
           if (-not (Test-Path $lnk)) { throw "No Start-menu shortcut at $lnk" }
           "Installed: $exe"
           "Start-menu shortcut: $lnk"
+
+          # Install again exactly as the in-app updater does; the installer should reopen the app.
+          $p = Start-Process dist\HideMyEmail-Setup.exe -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/RELAUNCH=1" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Update install exited with $($p.ExitCode)" }
+          Start-Sleep -Seconds 5
+          $running = Get-Process HideMyEmail -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe }
+          if (-not $running) { throw "The installer did not reopen the app after updating" }
+          "Update install reopened the app (pid $($running[0].Id))"
+          $running | Stop-Process -Force
 
       - uses: actions/upload-artifact@v4
         with:
@@ -76,6 +91,17 @@ jobs:
           }
           Get-Content selftest\report.txt
           if ($p.ExitCode -ne 0) { throw "Self-test failed with exit code $($p.ExitCode)" }
+
+      # The app checks the latest release for updates, so publish only builds that passed.
+      - name: Publish release
+        if: github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $notes = "Built from ${{ github.sha }}.`n`nDownload **HideMyEmail-Setup.exe** below. Installed apps update themselves."
+          gh release create "v$env:APP_VERSION" dist/HideMyEmail-Setup.exe --title "Hide My Email $env:APP_VERSION" --notes $notes --latest
+          if ($LASTEXITCODE -ne 0) { throw "Publishing the release failed" }
 
       # A windowed .exe can't print startup errors, so on failure rebuild as a
       # console app and run it to show what went wrong.

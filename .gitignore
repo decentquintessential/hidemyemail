@@ -6,3 +6,4 @@ build/
 *.spec
 selftest/
 .DS_Store
+_version.py
