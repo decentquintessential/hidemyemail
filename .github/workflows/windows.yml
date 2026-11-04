@@ -3,6 +3,7 @@ name: Build Windows app
 on:
   push:
     branches: [main]
+    paths-ignore: ["README.md", "docs/**"]  # documentation changes don't need a new release
   workflow_dispatch:
 
 env:

@@ -1,76 +1,133 @@
-# hme — Hide My Email from the terminal
+# Hide My Email
 
-Manage your iCloud+ **Hide My Email** addresses on your Mac: list, search, create, relabel, deactivate, delete and export.
+A desktop app for managing your iCloud+ **Hide My Email** addresses: the random `@icloud.com` addresses that forward to your real inbox. Create a new address in seconds, find the one you gave a website years ago, and switch off the ones that only bring spam.
 
-## Install
+Apple's own settings screen for Hide My Email is hidden deep in iCloud settings and has no search, sorting or bulk actions. This app adds them.
 
-```bash
-cd ~/Downloads/hidemyemail && ./install.sh
-```
+![Hide My Email on Windows](docs/windows-main.png)
 
-If it asks you to, add `~/.local/bin` to your PATH. Then:
+> Hide My Email is an independent app. It isn't made or endorsed by Apple. It uses the same private iCloud connection as icloud.com, because Apple doesn't offer an official one.
 
-```bash
-hme login you@icloud.com
-```
+## What it does
 
-Enter your Apple ID password and the 2FA code that appears on your iPhone or Mac. The password is saved in the macOS Keychain (item `pyicloud://icloud-password`). The session is saved in `~/Library/Application Support/hme`. You only need to do 2FA again when Apple expires the session, usually every few weeks.
+- **See all your addresses** with their label, note, creation date, the inbox they forward to, and where they were made: in Safari for a website, by hand, or in an app.
+- **Search** addresses, labels, notes and websites. Show active, inactive or all addresses, and **sort** by newest, oldest or name.
+- **Create** a new address and copy it to the clipboard in one step.
+- **Quick-create from anywhere** with a keyboard shortcut, without opening the main window.
+- **Edit** the label and note.
+- **Deactivate** an address to stop its mail (you can undo this), or **delete** it for good.
+- **Select several addresses** and copy, deactivate, reactivate or delete them together.
+- **Export** everything to a CSV file you can open in Excel or Numbers.
+- **Updates itself** on Windows.
 
-## Mac app
+## Requirements
 
-`install.sh` also builds **Hide My Email.app** into `~/Applications`. Open it from Spotlight or Launchpad. In the app you can:
+- An Apple ID with an **iCloud+** subscription. Hide My Email is part of iCloud+.
+- **Two-factor authentication** on your Apple ID. This is on by default for almost all accounts.
+- **Windows 10 or 11**. A downloadable Mac version isn't available yet; see [Mac](#mac).
 
-- Sign in with your Apple ID and 2FA code. If you've already logged in with the `hme` command, the app signs in automatically.
-- Search your addresses, switch between Active, Inactive and All, and sort by newest, oldest or name.
-- Press ⌘N to create a new address. You can generate a different one before you confirm, and it's copied to the clipboard when created.
-- Edit an address's label and note, copy it, deactivate or reactivate it, or delete it. The details also show where the address was created (Safari and the website, by hand, or an app), and search covers that too.
-- ⌘-click or ⇧-click to select several addresses, then copy, deactivate, reactivate or delete them together. Right-click works on the selection too.
-- Keyboard: ⌘C copies the selected addresses, Delete offers to deactivate or delete them, and the arrow keys move through the list.
-- **Menu bar:** click the envelope icon in the menu bar, or press **⌃⌥⌘H** from any app, type what the address is for and press Return. The new address is created and copied to the clipboard, without opening the main window.
-- Export everything to CSV, or sign out, from the ⋯ menu.
+## Install on Windows
 
-Note: iCloud doesn't allow editing the label or note of an inactive address. Reactivate it first.
+1. Go to the [latest release](https://github.com/decentquintessential/hidemyemail/releases/latest) and download **HideMyEmail-Setup.exe**.
+2. Your browser may warn you about the download, because the installer isn't signed with a paid certificate and few people have downloaded it yet. To keep it:
+   - **Edge:** open Downloads (Ctrl+J), point at the file, click **…** → **Keep**. If you're asked again, click **Show more** → **Keep anyway**.
+   - **Chrome:** open Downloads (Ctrl+J) and click **Keep**.
+3. Open the installer. If Windows shows "Windows protected your PC", click **More info** → **Run anyway**.
+4. Choose your options and click **Install**. You don't need admin rights: it installs only for your Windows user.
+   - **Create a desktop shortcut:** optional.
+   - **Start Hide My Email when I sign in to Windows:** recommended if you want the quick-create shortcut to work all the time.
 
-The app is a SwiftUI front end. A background helper (`hme_helper.py`) does the iCloud work, using the same Python environment as the command-line tool. To rebuild only the app, run `app/build.sh`.
+Hide My Email then appears in the Start menu. To remove it, go to **Settings → Apps → Installed apps**.
 
-## Windows app
+> On a work computer, your organisation's security settings may block unsigned programs completely. If you see "Blocked by your organization", ask your IT department.
 
-`windows/hide_my_email.py` is a Qt (PySide6) version of the app, with the same features. GitHub Actions builds it into a single `HideMyEmail.exe` on every push to `main`, using `.github/workflows/windows.yml`. To get the latest build:
+## Sign in
 
-1. Open the repository on GitHub and go to **Actions → Build Windows app**.
-2. Open the latest run and download the **HideMyEmail-windows** artifact. It's a zip containing `HideMyEmail-Setup.exe`, the installer. It installs for your user only, with no admin rights needed, adds a Start-menu shortcut, and offers a desktop shortcut and a "start when I sign in" option. You can uninstall it from Settings → Apps.
+The first time you open the app, sign in with your **Apple ID and password**, then type the **6-digit code** that appears on your iPhone, iPad or Mac.
 
-The installer is unsigned, so Windows SmartScreen warns about them the first time. Click **More info → Run anyway**. Removing the warning would need a paid code-signing certificate.
+Your password is stored securely by your computer: in **Windows Credential Manager** on Windows, or the **Keychain** on a Mac. After the first time, the app signs in on its own. Apple asks for a new code from time to time.
 
-The Windows app has the same features as the Mac app, including multi-select, Ctrl+C, Delete and a right-click menu. Instead of the menu bar it uses a **tray icon**: click it, or press **Ctrl+Alt+Shift+H** from any app, for the quick-create window. Closing the main window keeps the app running in the tray. To quit, right-click the tray icon.
+To sign out and remove the saved password, click **Sign out** in the toolbar.
 
-**Updates:** every build that passes its checks is published as a [release](https://github.com/decentquintessential/hidemyemail/releases), for example `v1.0.25`. The installed app checks for a newer release 10 seconds after it starts and every 6 hours, and you can also use **Check for updates** in the toolbar or the tray menu. When there's a new version, the app downloads it in the background and shows a bar: **Restart to update** installs it silently and reopens the app. The app's version is shown at the bottom right.
+## Using the app
 
-On Windows, your password is stored in Credential Manager and the session in `%APPDATA%\HideMyEmail`.
+### Create an address
 
-Each build also runs `HideMyEmail.exe --selftest`, which checks that everything the app needs is packaged. It saves screenshots of the app rendered on Windows (main window, multi-select, quick-create) in the **selftest** artifact. The build also test-installs the installer.
+Click **New address** (Ctrl+N), type what it's for (for example "Netflix"), and click **Create & Copy**. If you don't like the generated address, click **Another one** first. The new address is copied to your clipboard, ready to paste into a sign-up form.
 
-## Command line usage
+### Quick-create from anywhere
 
-| Command | What it does |
-|---|---|
-| `hme list` | Active addresses, newest first |
-| `hme list netflix` | Search address, label and note |
-| `hme list --inactive` / `--all` | Deactivated ones / everything |
-| `hme new "Bol.com" -n "webshop account"` | Create a new address and copy it to the clipboard |
-| `hme copy bol` | Copy an existing address to the clipboard |
-| `hme show bol` | Show all details (forward-to address, created date, ID) |
-| `hme edit bol --label "Bol" --note "..."` | Change the label or note |
-| `hme deactivate bol` | Stop forwarding (you can undo this) |
-| `hme reactivate bol` | Start forwarding again |
-| `hme delete bol` | Delete permanently (it deactivates first) |
-| `hme export ~/Desktop/hme.csv` | Back up everything to a CSV file |
-| `hme logout` | Remove the Keychain password and the session |
+Press **Ctrl+Alt+Shift+H** in any program, or click the Hide My Email icon in the system tray (near the clock). Type what the address is for and press **Enter**. The address is created and copied straight away.
 
-Wherever a command needs an address, you can give the full address, its label, or a unique part of either. If the text matches more than one address, hme lists the matches and asks you to be more specific.
+![Quick-create window](docs/windows-quick-create.png)
 
-## Caveats
+Closing the main window keeps Hide My Email running in the tray, so the shortcut keeps working. To quit completely, right-click the tray icon and choose **Quit**.
 
-- Apple has no official API for this. hme uses the same private iCloud web endpoints as icloud.com, through the [pyicloud](https://pypi.org/project/pyicloud/) library. Apple can change these endpoints at any time. If hme breaks, run `./install.sh` again to get the newest pyicloud.
-- You need an iCloud+ subscription.
-- Apple rate-limits address creation (roughly 5 per hour).
+### Find, sort and filter
+
+- Type in the search box to search addresses, labels, notes and websites.
+- The first menu under the search box shows **Active**, **Inactive** or **All** addresses.
+- **Sort** orders the list by **Newest first**, **Oldest first**, **Name A–Z** or **Name Z–A**. "Name" is the label, and addresses without a label go at the bottom. The app remembers your choice.
+
+### Edit, deactivate or delete
+
+Select an address to see its details. From there you can:
+
+- **Change the label or note** and click **Save**. iCloud doesn't allow edits to an inactive address, so reactivate it first.
+- **Deactivate** it. Mail sent to it is no longer forwarded, but you keep the address and can **Reactivate** it later.
+- **Delete** it. This is permanent: mail sent to it will bounce, and you can't get it back.
+
+### Work with several addresses at once
+
+Ctrl-click or Shift-click to select several addresses, or press Ctrl+A to select all of them. Then copy, deactivate, reactivate or delete them in one go, using the buttons on the right or by right-clicking the selection.
+
+![Several addresses selected](docs/windows-multiselect.png)
+
+### Keyboard shortcuts
+
+| Action | Windows | Mac |
+|---|---|---|
+| New address | Ctrl+N | ⌘N |
+| Quick-create from any app | Ctrl+Alt+Shift+H | ⌃⌥⌘H |
+| Copy the selected addresses | Ctrl+C | ⌘C |
+| Deactivate or delete the selected addresses | Delete | Delete |
+| Refresh the list | F5 | ⌘R |
+| Select several addresses | Ctrl-click, Shift-click | ⌘-click, ⇧-click |
+
+### Export
+
+Click **Export CSV…** to save all your addresses, with their labels, notes, status and creation dates, as a spreadsheet file.
+
+## Updates
+
+On Windows, the app checks for a new version shortly after it starts and every few hours. You can also click **Check for updates** in the toolbar or the tray menu. When a new version is available, the app downloads it in the background and shows a bar at the top of the window:
+
+![Update bar](docs/windows-update.png)
+
+Click **Restart to update**. The app closes, installs the new version and opens again within a few seconds. The version you have is shown at the bottom right of the window. All versions are listed on the [releases page](https://github.com/decentquintessential/hidemyemail/releases).
+
+## Mac
+
+There is a native Mac version, with the same features plus a menu bar icon for quick-create. It isn't available as a download yet. Until it is, use the Windows app, or manage your addresses in **System Settings → [your name] → iCloud → Hide My Email**.
+
+## Good to know
+
+- **Creation limits:** Apple limits how many addresses you can create in a short time. If creating fails, try again in an hour.
+- **No "last used" date:** iCloud doesn't record when an address last received mail, so the app can't show it.
+- **Forwarding address:** to change which inbox your addresses forward to, use your iPhone or Mac settings. The app shows the current forwarding address but can't change it.
+- **Possible breakage:** because Apple has no official connection for Hide My Email, a change on Apple's side could stop the app working until it's updated.
+
+## Privacy
+
+- The app only talks to **Apple's iCloud servers**, to manage your addresses, and to **GitHub**, to check for updates. Nothing is sent anywhere else, and there's no tracking or analytics.
+- Your password and iCloud session are stored only on your own computer.
+- The code is public in this repository, so anyone can check what it does.
+
+## How it's built
+
+For those who are curious, or want to contribute:
+
+- The iCloud connection uses the open-source [pyicloud](https://pypi.org/project/pyicloud/) library.
+- The Windows app is written in Python with Qt ([PySide6](https://doc.qt.io/qtforpython-6/)) in [`windows/`](windows). The installer is made with [Inno Setup](https://jrsoftware.org/isinfo.php).
+- The Mac app is written in SwiftUI in [`app/`](app). It uses the same iCloud code as the Windows app, through [`hme_helper.py`](hme_helper.py).
+- Every change is built and tested automatically on a Windows machine by [GitHub Actions](.github/workflows/windows.yml). The tests install the app, check the update process and take the screenshots on this page. Only builds that pass every check are published as a release.
