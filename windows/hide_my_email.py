@@ -96,14 +96,22 @@ def launch_installer(installer: Path):
     the installer reopens, which then looks for its files in this app's _MEI folder -
     deleted by the time it starts ("Failed to load Python DLL"). So start the installer
     with those variables removed, and tell PyInstaller to start fresh.
+
+    The app's launcher process also puts everything it starts into a Windows job that it
+    waits for, so the installer (and the app it reopens) must break away from that job.
     """
     import subprocess
 
     env = {k: v for k, v in os.environ.items() if not k.upper().startswith(("_PYI", "_MEI"))}
     env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    args = [str(installer), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/RELAUNCH=1"]
     flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-    subprocess.Popen([str(installer), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/RELAUNCH=1"],
-                     creationflags=flags, close_fds=True, env=env, cwd=str(Path(installer).parent))
+    breakaway = getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0x01000000)
+    try:
+        subprocess.Popen(args, creationflags=flags | breakaway, close_fds=True, env=env,
+                         cwd=str(Path(installer).parent))
+    except OSError:  # the job doesn't allow breaking away
+        subprocess.Popen(args, creationflags=flags, close_fds=True, env=env, cwd=str(Path(installer).parent))
 
 
 def record_start():

@@ -158,9 +158,14 @@ jobs:
           security import "$RUNNER_TEMP/signing.p12" -k "$KC" -P "$P12_PASSWORD" -T /usr/bin/codesign >/dev/null
           rm -f "$RUNNER_TEMP/signing.p12"
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KCPASS" "$KC" >/dev/null
-          echo "SIGN_IDENTITY=$SHA1" >> "$GITHUB_ENV"
+          # codesign only finds identities in keychains on the search list.
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+          ID=$(security find-identity -p codesigning "$KC" | awk '/\)/ {print $2; exit}')
+          if [ -z "$ID" ]; then echo "The certificate was imported but no signing identity was found"; exit 1; fi
+          if [ -n "$SHA1" ] && [ "$ID" != "$(echo "$SHA1" | tr -d '[:space:]')" ]; then echo "Certificate fingerprint mismatch"; exit 1; fi
+          echo "SIGN_IDENTITY=$ID" >> "$GITHUB_ENV"
           echo "SIGN_KEYCHAIN=$KC" >> "$GITHUB_ENV"
-          echo "Signing with the release certificate."
+          echo "Signing with the release certificate (${ID:0:8}…)"
 
       - name: Build app and disk image
         run: |
