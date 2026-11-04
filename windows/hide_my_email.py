@@ -156,6 +156,10 @@ def origin_text(a: dict) -> str:
     return source
 
 
+def is_dark_mode() -> bool:
+    return QGuiApplication.styleHints().colorScheme() == Qt.ColorScheme.Dark
+
+
 def plural(n: int, word: str = "address") -> str:
     return f"{n} {word}" + ("" if n == 1 else "es")
 
@@ -409,6 +413,7 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(app_icon())
         self.resize(900, 580)
 
+        self.delete_buttons: list[QPushButton] = []
         self.stack = QStackedWidget()
         self.update_bar = self._build_update_bar()
         central = QWidget()
@@ -428,6 +433,8 @@ class MainWindow(QMainWindow):
         for page in (self.starting_page, self.login_page, self.code_page, self.main_page):
             self.stack.addWidget(page)
         self.toolbar.setVisible(False)
+        self.apply_theme()
+        QGuiApplication.styleHints().colorSchemeChanged.connect(self.apply_theme)
 
     # ------------------------------------------------------------ plumbing
 
@@ -500,12 +507,13 @@ class MainWindow(QMainWindow):
     def _build_update_bar(self) -> QWidget:
         bar = QWidget()
         bar.setObjectName("updateBar")
-        bar.setStyleSheet("#updateBar { background: #e8f0fe; border-bottom: 1px solid #c6d7f7; }")
         self.update_text = QLabel()
         restart = QPushButton("Restart to update")
+        restart.setObjectName("restart")
         restart.setDefault(True)
         restart.clicked.connect(self.install_update)
         later = QPushButton("Later")
+        later.setObjectName("later")
         later.setFlat(True)
         later.clicked.connect(bar.hide)
         row = QHBoxLayout(bar)
@@ -515,6 +523,22 @@ class MainWindow(QMainWindow):
         row.addWidget(restart)
         bar.hide()
         return bar
+
+    def apply_theme(self, *_):
+        """Colours that don't come from the system palette, in light and dark variants."""
+        dark = is_dark_mode()
+        bg, border, fg, accent = (("#1d3557", "#2e5283", "#eef3fc", "#4c8dff") if dark
+                                  else ("#e8f0fe", "#c6d7f7", "#14213d", ACCENT))
+        self.update_bar.setStyleSheet(f"""
+            #updateBar {{ background: {bg}; border-bottom: 1px solid {border}; }}
+            #updateBar QLabel {{ color: {fg}; }}
+            #updateBar QPushButton#later {{ color: {fg}; background: transparent; border: none; padding: 4px 10px; }}
+            #updateBar QPushButton#restart {{ color: white; background: {accent}; border: none;
+                                             border-radius: 4px; padding: 5px 14px; }}
+        """)
+        red = "#ff7b72" if dark else "#c62828"
+        for button in self.delete_buttons:
+            button.setStyleSheet(f"color: {red};")
 
     def start_update_checks(self):
         """Check GitHub shortly after start and every few hours (only in released builds)."""
@@ -737,7 +761,7 @@ class MainWindow(QMainWindow):
         self.toggle = QPushButton()
         self.toggle.clicked.connect(self.toggle_active)
         delete = QPushButton("Delete…")
-        delete.setStyleSheet("color: #c62828;")
+        self.delete_buttons.append(delete)
         delete.clicked.connect(lambda: self.ask_delete(self.selected(), allow_deactivate=False))
 
         head = QHBoxLayout()
@@ -786,7 +810,7 @@ class MainWindow(QMainWindow):
             button = QPushButton(text)
             button.clicked.connect(slot)
             if text.startswith("Delete"):
-                button.setStyleSheet("color: #c62828;")
+                self.delete_buttons.append(button)
             buttons.addWidget(button)
         buttons.addStretch()
         page = QWidget()
@@ -1063,7 +1087,13 @@ def selftest(out_dir: str) -> int:
     win.show_update_ready()
     app.processEvents()
     assert win.update_bar.isVisible()
-    win.grab().save(str(out / "update.png"))
+    for scheme, name in ((Qt.ColorScheme.Light, "update-light.png"), (Qt.ColorScheme.Dark, "update-dark.png")):
+        QGuiApplication.styleHints().setColorScheme(scheme)
+        app.processEvents()
+        win.apply_theme()
+        app.processEvents()
+        win.grab().save(str(out / name))
+    report.write(f"color scheme switching: {'ok' if is_dark_mode() else 'not supported here'}\n")
     report.write("selftest ok\n")
     report.close()
     # Keep Qt objects alive until the process is terminated: letting Python destroy
