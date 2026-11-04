@@ -929,8 +929,12 @@ def main() -> int:
         # skip DLL unload too, where Qt can crash after the test already passed.
         if sys.platform == "win32":
             import ctypes
+            from ctypes import wintypes
 
             k32 = ctypes.windll.kernel32
+            # Declare the types: without them ctypes truncates the 64-bit process handle.
+            k32.GetCurrentProcess.restype = wintypes.HANDLE
+            k32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
             k32.TerminateProcess(k32.GetCurrentProcess(), code)
         os._exit(code)
     app = QApplication(sys.argv)
