@@ -53,6 +53,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
 
       - name: Test the installer
+        timeout-minutes: 8
         shell: pwsh
         run: |
           $p = Start-Process dist\HideMyEmail-Setup.exe -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART" -Wait -PassThru
@@ -65,7 +66,9 @@ jobs:
           "Start-menu shortcut: $lnk"
 
           # Install again exactly as the in-app updater does; the installer should reopen the app.
-          $p = Start-Process dist\HideMyEmail-Setup.exe -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/RELAUNCH=1" -Wait -PassThru
+          # Wait for the installer only: Start-Process -Wait would also wait for the app it reopens.
+          $p = Start-Process dist\HideMyEmail-Setup.exe -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/RELAUNCH=1" -PassThru
+          if (-not $p.WaitForExit(180000)) { throw "Update install did not finish within 3 minutes" }
           if ($p.ExitCode -ne 0) { throw "Update install exited with $($p.ExitCode)" }
           Start-Sleep -Seconds 5
           $running = Get-Process HideMyEmail -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe }
