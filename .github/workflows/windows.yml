@@ -17,7 +17,7 @@ concurrency:
 env:
   APP_VERSION: 1.0.${{ github.run_number }}
   PYI_ARGS: >-
-    --noconfirm --onefile --paths .
+    --noconfirm --onedir --paths .
     --collect-submodules pyicloud
     --collect-submodules keyring.backends
     --collect-data pyicloud
@@ -107,7 +107,7 @@ jobs:
         timeout-minutes: 5
         shell: pwsh
         run: |
-          $p = Start-Process dist\HideMyEmail.exe -ArgumentList "--selftest", "selftest" -PassThru
+          $p = Start-Process dist\HideMyEmail\HideMyEmail.exe -ArgumentList "--selftest", "selftest" -PassThru
           if (-not $p.WaitForExit(120000)) {
             Stop-Process -Id $p.Id -Force
             Get-Process HideMyEmail -ErrorAction SilentlyContinue | Stop-Process -Force
@@ -125,7 +125,7 @@ jobs:
         shell: pwsh
         run: |
           pyinstaller $env:PYI_ARGS.Split(" ") --console --name HideMyEmailDebug --distpath dist-debug windows/hide_my_email.py *> $null
-          $p = Start-Process dist-debug\HideMyEmailDebug.exe -ArgumentList "--selftest", "diag" -PassThru -NoNewWindow -RedirectStandardOutput diag-out.txt -RedirectStandardError diag-err.txt
+          $p = Start-Process dist-debug\HideMyEmailDebug\HideMyEmailDebug.exe -ArgumentList "--selftest", "diag" -PassThru -NoNewWindow -RedirectStandardOutput diag-out.txt -RedirectStandardError diag-err.txt
           if (-not $p.WaitForExit(90000)) { Stop-Process -Id $p.Id -Force; "TIMEOUT" }
           "exit: $($p.ExitCode)"
           Get-Content diag\*.txt, diag-out.txt, diag-err.txt -ErrorAction SilentlyContinue

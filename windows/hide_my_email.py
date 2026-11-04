@@ -622,6 +622,7 @@ class MainWindow(QMainWindow):
 
     def install_update(self):
         """Run the downloaded installer silently; it reopens the app when done."""
+        self._quitting = True  # so the installer's close request isn't turned into "hide to tray"
         launch_installer(self.update_ready[1])
         self.quit_app()
 
