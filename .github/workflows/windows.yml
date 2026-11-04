@@ -76,12 +76,22 @@ jobs:
           # which it proves by writing last-start.txt (a startup failure shows an error box instead).
           $marker = "$env:APPDATA\HideMyEmail\last-start.txt"
           $p = Start-Process $exe -ArgumentList "--test-update", "dist\HideMyEmail-Setup.exe" -PassThru
-          if (-not $p.WaitForExit(60000)) { throw "The app did not hand over to the installer" }
+          function Show-Evidence {
+            "--- Hide My Email / installer processes:"
+            Get-CimInstance Win32_Process | Where-Object { $_.Name -match "HideMyEmail" } |
+              Format-Table ProcessId, ParentProcessId, Name, CommandLine -AutoSize -Wrap | Out-String -Width 300
+            "--- Windows with a title:"
+            Get-Process | Where-Object { $_.MainWindowTitle } | Format-Table Id, ProcessName, MainWindowTitle -AutoSize | Out-String -Width 300
+            "--- Installer log:"
+            Get-Content "dist\install.log" -ErrorAction SilentlyContinue | Select-Object -Last 40
+          }
+          if (-not $p.WaitForExit(60000)) { Show-Evidence; throw "The app did not hand over to the installer" }
           Remove-Item $marker -ErrorAction SilentlyContinue
           $deadline = (Get-Date).AddMinutes(3)
           while (-not (Test-Path $marker) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
           $running = Get-Process HideMyEmail -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe }
           if (-not (Test-Path $marker)) {
+            Show-Evidence
             $running | Stop-Process -Force -ErrorAction SilentlyContinue
             throw "After the update the app did not start properly"
           }

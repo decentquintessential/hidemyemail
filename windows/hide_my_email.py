@@ -104,7 +104,8 @@ def launch_installer(installer: Path):
 
     env = {k: v for k, v in os.environ.items() if not k.upper().startswith(("_PYI", "_MEI"))}
     env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
-    args = [str(installer), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/RELAUNCH=1"]
+    log = Path(installer).parent / "install.log"  # Inno Setup's own log, for diagnosing failed updates
+    args = [str(installer), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/RELAUNCH=1", f"/LOG={log}"]
     flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     breakaway = getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0x01000000)
     try:
