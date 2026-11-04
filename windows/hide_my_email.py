@@ -569,8 +569,20 @@ def selftest(out_dir: str) -> int:
 
 def main() -> int:
     if "--selftest" in sys.argv:
+        import os
+        import traceback
+
         i = sys.argv.index("--selftest")
-        return selftest(sys.argv[i + 1] if len(sys.argv) > i + 1 else "selftest")
+        out_dir = sys.argv[i + 1] if len(sys.argv) > i + 1 else "selftest"
+        try:
+            code = selftest(out_dir)
+        except BaseException:
+            Path(out_dir).mkdir(parents=True, exist_ok=True)
+            with (Path(out_dir) / "report.txt").open("a") as f:
+                f.write("CRASH:\n" + traceback.format_exc())
+            code = 2
+        # Exit hard: no Qt teardown and no error dialog that could hang a headless runner.
+        os._exit(code)
     app = QApplication(sys.argv)
     app.setApplicationName("Hide My Email")
     app.setStyle("Fusion") if sys.platform != "win32" else None
