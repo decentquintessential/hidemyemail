@@ -18,7 +18,7 @@ Apple's own settings screen for Hide My Email is hidden deep in iCloud settings 
 - **Deactivate** an address to stop its mail (you can undo this), or **delete** it for good.
 - **Select several addresses** and copy, deactivate, reactivate or delete them together.
 - **Export** everything to a CSV file you can open in Excel or Numbers.
-- Runs on **Windows** and **Mac**. The Windows version updates itself.
+- Runs on **Windows** and **Mac**, and **updates itself**.
 
 ## Requirements
 
@@ -115,13 +115,13 @@ Click **Export CSV…** on Windows, or **⋯ → Export to CSV…** on a Mac, to
 
 ## Updates
 
-On Windows, the app checks for a new version shortly after it starts and every few hours. You can also click **Check for updates** in the toolbar or the tray menu. When a new version is available, the app downloads it in the background and shows a bar at the top of the window:
+The app checks for a new version shortly after it starts and every few hours. You can also check yourself: click **Check for updates** in the toolbar or tray menu on Windows, or choose **Hide My Email → Check for Updates…** (or **⋯ → Check for Updates…**) on a Mac. When a new version is available, the app downloads it in the background and shows a bar at the top of the window:
 
 ![Update bar](docs/windows-update.png)
 
-Click **Restart to update**. The app closes, installs the new version and opens again within a few seconds. The version you have is shown at the bottom right of the window. All versions are listed on the [releases page](https://github.com/decentquintessential/hidemyemail/releases).
+Click **Restart to update**. The app closes, installs the new version and opens again within a few seconds. On a Mac the bar also appears in the menu bar panel. If an update ever fails, the old version stays in place and opens again.
 
-The Mac version doesn't update itself yet. To update it, download the newest **HideMyEmail-Mac.dmg** and drag the app to Applications again, replacing the old one. To see which version you have, select Hide My Email in Finder and press ⌘I.
+To see which version you have: on Windows it's shown at the bottom right of the window; on a Mac, choose **Hide My Email → About Hide My Email**. All versions are listed on the [releases page](https://github.com/decentquintessential/hidemyemail/releases).
 
 ## Good to know
 
@@ -143,4 +143,4 @@ For those who are curious, or want to contribute:
 - The iCloud connection uses the open-source [pyicloud](https://pypi.org/project/pyicloud/) library.
 - The Windows app is written in Python with Qt ([PySide6](https://doc.qt.io/qtforpython-6/)) in [`windows/`](windows). The installer is made with [Inno Setup](https://jrsoftware.org/isinfo.php).
 - The Mac app is written in SwiftUI in [`app/`](app). It uses the same iCloud code as the Windows app, through [`hme_helper.py`](hme_helper.py), which is packaged inside the app so nothing else needs to be installed.
-- Every change is built and tested automatically on a Windows machine and a Mac by [GitHub Actions](.github/workflows/windows.yml). The tests install and open the apps, check the Windows update process and take the screenshots on this page. A release is published only when both builds pass every check.
+- Every change is built and tested automatically on a Windows machine and a Mac by [GitHub Actions](.github/workflows/windows.yml). The tests install and open the apps, check the update process on both systems and take the screenshots on this page. A release is published only when both builds pass every check.
