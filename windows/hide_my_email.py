@@ -32,7 +32,7 @@ if "--selftest" in sys.argv:
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, QTimer, Signal
+from PySide6.QtCore import QObject, QRunnable, QSettings, Qt, QThreadPool, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QFont, QGuiApplication, QIcon, QKeySequence, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QDialog, QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
@@ -64,6 +64,19 @@ class _Job(QRunnable):
             self.signals.done.emit(self.fn())
         except Exception as exc:
             self.signals.failed.emit(str(exc))
+
+
+SORT_ORDERS = ["Newest first", "Oldest first", "Name A–Z", "Name Z–A"]
+
+
+def sort_aliases(aliases: list[dict], order: str) -> list[dict]:
+    if order.startswith("Name"):
+        # Sort by label; unlabelled addresses always go last, by address.
+        labelled = [a for a in aliases if a.get("label")]
+        rest = sorted((a for a in aliases if not a.get("label")), key=lambda a: a.get("hme") or "")
+        labelled.sort(key=lambda a: a["label"].casefold(), reverse=order.endswith("Z–A"))
+        return labelled + rest
+    return sorted(aliases, key=lambda a: a.get("createTimestamp") or 0, reverse=order == "Newest first")
 
 
 def fmt_date(ms) -> str:
@@ -351,6 +364,10 @@ class MainWindow(QMainWindow):
         self.filter = QComboBox()
         self.filter.addItems(["Active", "Inactive", "All"])
         self.filter.currentIndexChanged.connect(self.refresh_list)
+        self.sort = QComboBox(toolTip="Sort addresses")
+        self.sort.addItems(SORT_ORDERS)
+        self.sort.setCurrentText(QSettings("HideMyEmail", "HideMyEmail").value("sort", SORT_ORDERS[0]))
+        self.sort.currentTextChanged.connect(self._sort_changed)
         self.list = QListWidget()
         self.list.setAlternatingRowColors(True)
         self.list.currentItemChanged.connect(self.show_detail)
@@ -362,6 +379,7 @@ class MainWindow(QMainWindow):
         top = QHBoxLayout()
         top.addWidget(self.search, 1)
         top.addWidget(self.filter)
+        top.addWidget(self.sort)
         lv.addLayout(top)
         lv.addWidget(self.list, 1)
         lv.addWidget(self.count)
@@ -442,17 +460,22 @@ class MainWindow(QMainWindow):
 
     def set_aliases(self, aliases, select=None):
         keep = select or (self.current() or {}).get("hme")
-        self.aliases = sorted(aliases, key=lambda a: a.get("createTimestamp", 0), reverse=True)
+        self.aliases = list(aliases)
         self.refresh_list(keep=keep)
+
+    def _sort_changed(self, order: str):
+        QSettings("HideMyEmail", "HideMyEmail").setValue("sort", order)
+        self.refresh_list()
 
     def visible(self) -> list[dict]:
         mode = self.filter.currentText()
         q = self.search.text().lower()
-        return [
+        shown = [
             a for a in self.aliases
             if (mode == "All" or a.get("isActive", True) == (mode == "Active"))
             and (not q or any(q in (a.get(k) or "").lower() for k in ("hme", "label", "note")))
         ]
+        return sort_aliases(shown, self.sort.currentText())
 
     def refresh_list(self, *_, keep=None):
         keep = keep or (self.current() or {}).get("hme")

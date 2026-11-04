@@ -141,6 +141,24 @@ enum Filter: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+enum SortOrder: String, CaseIterable, Identifiable {
+    case newest = "Newest First", oldest = "Oldest First", nameAZ = "Name A–Z", nameZA = "Name Z–A"
+    var id: String { rawValue }
+
+    func inOrder(_ a: Alias, _ b: Alias) -> Bool {
+        switch self {
+        case .newest: return (a.created ?? .distantPast) > (b.created ?? .distantPast)
+        case .oldest: return (a.created ?? .distantPast) < (b.created ?? .distantPast)
+        case .nameAZ, .nameZA:
+            // Sort by label; unlabelled addresses always go last, by address.
+            if a.label.isEmpty != b.label.isEmpty { return b.label.isEmpty }
+            if a.label.isEmpty { return a.address < b.address }
+            let order = a.label.localizedStandardCompare(b.label)
+            return self == .nameAZ ? order == .orderedAscending : order == .orderedDescending
+        }
+    }
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     @Published var phase: Phase = .starting
@@ -150,6 +168,9 @@ final class AppModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var search = ""
     @Published var filter: Filter = .active
+    @Published var sort: SortOrder = SortOrder(rawValue: UserDefaults.standard.string(forKey: "sort") ?? "") ?? .newest {
+        didSet { UserDefaults.standard.set(sort.rawValue, forKey: "sort") }
+    }
     @Published var selection: Alias.ID?
     @Published var toast: String?
 
@@ -170,7 +191,7 @@ final class AppModel: ObservableObject {
                     || $0.label.localizedCaseInsensitiveContains(search)
                     || $0.note.localizedCaseInsensitiveContains(search)
             }
-            .sorted { ($0.created ?? .distantPast) > ($1.created ?? .distantPast) }
+            .sorted(by: sort.inOrder)
     }
 
     var selected: Alias? { aliases.first { $0.id == selection } }
@@ -474,6 +495,13 @@ struct MainView: View {
                     .keyboardShortcut("r")
                 Button { showingNew = true } label: { Label("New Address", systemImage: "plus") }
                     .keyboardShortcut("n")
+                Menu {
+                    Picker("Sort By", selection: $model.sort) {
+                        ForEach(SortOrder.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                    .pickerStyle(.inline)
+                } label: { Label("Sort", systemImage: "arrow.up.arrow.down") }
+                    .help("Sort addresses")
                 Menu {
                     Button("Export to CSV…") { model.exportCSV() }
                     Divider()

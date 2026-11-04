@@ -21,7 +21,7 @@ Enter your Apple ID password and the 2FA code that appears on your iPhone or Mac
 `install.sh` also builds **Hide My Email.app** into `~/Applications`. Open it from Spotlight or Launchpad. In the app you can:
 
 - Sign in with your Apple ID and 2FA code. If you've already logged in with the `hme` command, the app signs in automatically.
-- Search your addresses and switch between Active, Inactive and All.
+- Search your addresses, switch between Active, Inactive and All, and sort by newest, oldest or name.
 - Press ⌘N to create a new address. You can generate a different one before you confirm, and it's copied to the clipboard when created.
 - Edit an address's label and note, copy it, deactivate or reactivate it, or delete it.
 - Export everything to CSV, or sign out, from the ⋯ menu.
