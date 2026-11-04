@@ -93,7 +93,13 @@ final class Helper {
         try process.run()
     }
 
-    deinit { process.terminate() }
+    deinit { stop() }
+
+    /// End the helper process (used when the app quits, so nothing is left running).
+    func stop() {
+        try? input.fileHandleForWriting.close()
+        if process.isRunning { process.terminate() }
+    }
 
     func call(_ cmd: String, _ params: [String: Any] = [:]) async throws -> Any {
         // "id" and "cmd" belong to the protocol; an address id goes in "alias_id".
@@ -204,6 +210,8 @@ final class AppModel: ObservableObject {
     @Published var toast: String?
 
     private var helper: Helper?
+
+    func shutdown() { helper?.stop() }
     private var started = false
 
     var visible: [Alias] {
@@ -518,6 +526,7 @@ struct SecurityKeyView: View {
 
 struct MainView: View {
     @EnvironmentObject var model: AppModel
+    @AppStorage("keepInMenuBar") private var keepInMenuBar = false
     @State private var showingNew = false
     @State private var pendingDelete: [Alias] = []
 
@@ -612,6 +621,7 @@ struct MainView: View {
                 Menu {
                     Button("Export to CSV…") { model.exportCSV() }
                     Button("Check for Updates…") { Task { await Updater.shared.check(manual: true) } }
+                    Toggle("Keep Running in Menu Bar When Closed", isOn: $keepInMenuBar)
                     Divider()
                     Button("Sign Out \(model.appleId)") { Task { await model.logout() } }
                 } label: { Label("More", systemImage: "ellipsis.circle") }
@@ -897,6 +907,12 @@ final class QuickPanel {
     private var panel: NSPanel?
     private var hotKey: EventHotKeyRef?
 
+    func unregisterHotKey() {
+        if let hotKey { UnregisterEventHotKey(hotKey) }
+        hotKey = nil
+        panel?.orderOut(nil)
+    }
+
     func registerHotKey() {
         var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
         InstallEventHandler(GetApplicationEventTarget(), { _, _, _ in
@@ -1080,9 +1096,26 @@ struct UpdateBanner: View {
 
 // MARK: - App
 
+/// Closing the window quits the app completely, unless "Keep Running in Menu Bar" is on.
+/// Quitting stops the helper process and releases the global shortcut.
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        !UserDefaults.standard.bool(forKey: "keepInMenuBar")
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        MainActor.assumeIsolated {
+            QuickPanel.shared.unregisterHotKey()
+            AppModel.shared.shutdown()
+        }
+    }
+}
+
 @main
 struct HideMyEmailApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var model = AppModel.shared
+    @AppStorage("keepInMenuBar") private var keepInMenuBar = false
 
     init() {
         QuickPanel.shared.registerHotKey()
@@ -1099,6 +1132,7 @@ struct HideMyEmailApp: App {
         .commands {
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates…") { Task { await Updater.shared.check(manual: true) } }
+                Toggle("Keep Running in Menu Bar When Closed", isOn: $keepInMenuBar)
             }
         }
 

@@ -35,7 +35,7 @@ Apple's own settings screen for Hide My Email is hidden deep in iCloud settings 
 3. Open the installer. If Windows shows "Windows protected your PC", click **More info** → **Run anyway**.
 4. Choose your options and click **Install**. You don't need admin rights: it installs only for your Windows user.
    - **Create a desktop shortcut:** optional.
-   - **Start Hide My Email when I sign in to Windows:** recommended if you want the quick-create shortcut to work all the time.
+   - **Start Hide My Email when I sign in to Windows:** useful together with the *Keep running in the tray* option (see [Quick-create from anywhere](#quick-create-from-anywhere)), so the shortcut always works.
 
 Hide My Email then appears in the Start menu. To remove it, go to **Settings → Apps → Installed apps**.
 
@@ -57,7 +57,7 @@ After that, Hide My Email also appears as an envelope icon in the menu bar.
 
 The first time you open the app, sign in with your **Apple ID and password**, then type the **6-digit code** that appears on your iPhone, iPad or Mac.
 
-Your password is stored securely by your computer: in **Windows Credential Manager** on Windows, or the **Keychain** on a Mac. If your Mac asks whether **hme-helper** may use your Keychain, click **Always Allow**. hme-helper is the part of the app that talks to iCloud. After the first time, the app signs in on its own. Apple asks for a new code from time to time.
+Your password is stored securely by your computer: in **Windows Credential Manager** on Windows, or the **Keychain** on a Mac. If your Mac asks whether **hme-helper** may use your Keychain, type the password you use to **log in to your Mac** (not your Apple ID password) and click **Always Allow**. hme-helper is the part of the app that talks to iCloud. After the first time, the app signs in on its own. Apple asks for a new code from time to time.
 
 To sign out and remove the saved password, click **Sign out** in the toolbar on Windows, or **⋯ → Sign Out** on a Mac.
 
@@ -76,7 +76,9 @@ Type what the address is for and press **Enter** (Return on a Mac). The address 
 
 ![Quick-create window](docs/windows-quick-create.png)
 
-Closing the main window keeps Hide My Email running in the tray or menu bar, so the shortcut keeps working. To quit completely, right-click the tray icon and choose **Quit** on Windows, or click the menu bar icon and choose **Quit** on a Mac.
+The shortcut works while Hide My Email is open. Closing the main window **quits the app completely**: nothing keeps running in the background.
+
+If you want the shortcut to work all the time, switch on **Options → Keep running in the tray when closed** on Windows, or **⋯ → Keep Running in Menu Bar When Closed** on a Mac. Closing the window then keeps the app in the tray or menu bar. To quit it completely, right-click the tray icon and choose **Quit** on Windows, or click the menu bar icon and choose **Quit** (or press ⌘Q) on a Mac.
 
 ### Find, sort and filter
 

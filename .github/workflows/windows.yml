@@ -117,6 +117,21 @@ jobs:
           Get-Content selftest\report.txt
           if ($p.ExitCode -ne 0) { throw "Self-test failed with exit code $($p.ExitCode)" }
 
+      - name: Test that closing the window quits completely
+        timeout-minutes: 3
+        shell: pwsh
+        run: |
+          $exe = "$env:LOCALAPPDATA\Programs\Hide My Email\HideMyEmail.exe"
+          Get-Process HideMyEmail -ErrorAction SilentlyContinue | Stop-Process -Force
+          $p = Start-Process $exe -PassThru
+          Start-Sleep -Seconds 8
+          if (-not $p.CloseMainWindow()) { throw "Could not find the app's window to close" }
+          if (-not $p.WaitForExit(20000)) { throw "The app was still running 20 seconds after its window was closed" }
+          Start-Sleep -Seconds 2
+          $left = Get-Process HideMyEmail -ErrorAction SilentlyContinue
+          if ($left) { $left | Format-Table Id, Path | Out-String; throw "Hide My Email processes were left running" }
+          "Closing the window quit the app completely."
+
       # A windowed .exe can't print startup errors, so on failure rebuild as a
       # console app and run it to show what went wrong.
       - name: Diagnose with a console build
@@ -201,7 +216,13 @@ jobs:
           pgrep -fl "Hide My Email.app/Contents/MacOS/HideMyEmail"
           pgrep -fl "hme-helper/hme-helper"
           cat "$HOME/Library/Application Support/hme/helper.log"
-          pkill -f "Hide My Email.app/Contents/MacOS/HideMyEmail" || true
+
+      - name: Test that quitting leaves nothing running
+        run: |
+          osascript -e 'quit app "Hide My Email"'
+          for _ in $(seq 1 20); do pgrep -f "Hide My Email.app/Contents/|hme-helper/hme-helper" >/dev/null || break; sleep 1; done
+          if pgrep -fl "Hide My Email.app/Contents/|hme-helper/hme-helper"; then echo "processes left running after quitting"; exit 1; fi
+          echo "Quitting stopped the app and its helper."
 
       - name: Test updating an older copy
         run: |

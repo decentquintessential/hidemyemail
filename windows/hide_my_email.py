@@ -42,7 +42,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QComboBox, QDialog, QFileDialog, QFormLayout, QHBoxLayout,
     QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox,
-    QPlainTextEdit, QPushButton, QSplitter, QStackedWidget, QSystemTrayIcon, QToolBar,
+    QPlainTextEdit, QPushButton, QSplitter, QStackedWidget, QSystemTrayIcon, QToolBar, QToolButton,
     QVBoxLayout, QWidget,
 )
 
@@ -429,6 +429,14 @@ class GlobalHotKey(QAbstractNativeEventFilter):
         if self.registered:
             QApplication.instance().installNativeEventFilter(self)
 
+    def unregister(self):
+        if self.registered:
+            import ctypes
+
+            ctypes.windll.user32.UnregisterHotKey(None, 1)
+            QApplication.instance().removeNativeEventFilter(self)
+            self.registered = False
+
     def nativeEventFilter(self, event_type, message):
         if event_type in (b"windows_generic_MSG", b"windows_dispatcher_MSG"):
             from ctypes import wintypes
@@ -515,16 +523,23 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------ tray and hotkey
 
     def setup_tray(self):
-        """Tray icon with quick-create; closing the window then keeps the app in the tray."""
+        """Tray icon with quick-create while the app runs.
+
+        Closing the window quits the app completely, unless "Keep running in the tray"
+        is switched on: then it stays in the tray so the global shortcut keeps working.
+        """
         self.quick = QuickCreateDialog(self)
         self.hotkey = GlobalHotKey(self.quick.popup)
         self.tray = None
+        QApplication.instance().setQuitOnLastWindowClosed(False)  # closeEvent decides
         if not QSystemTrayIcon.isSystemTrayAvailable():
             return
         menu = QMenu()
         menu.addAction("New address…", self.quick.popup)
         menu.addAction("Open Hide My Email", self.bring_to_front)
         menu.addAction("Check for updates", lambda: self.check_for_updates(manual=True))
+        menu.addSeparator()
+        menu.addAction(self.keep_running_action)
         menu.addSeparator()
         menu.addAction("Quit", self.quit_app)
         self.tray = QSystemTrayIcon(app_icon(), self)
@@ -533,11 +548,25 @@ class MainWindow(QMainWindow):
         self.tray.activated.connect(
             lambda reason: self.quick.popup() if reason == QSystemTrayIcon.Trigger else None)
         self.tray.show()
-        QApplication.instance().setQuitOnLastWindowClosed(False)
         self._told_about_tray = False
 
+    @staticmethod
+    def keep_running() -> bool:
+        return QSettings("HideMyEmail", "HideMyEmail").value("keep_running", False, type=bool)
+
+    @staticmethod
+    def _set_keep_running(on: bool):
+        QSettings("HideMyEmail", "HideMyEmail").setValue("keep_running", on)
+
     def quit_app(self):
+        """Quit completely: no tray icon, global shortcut or background work left behind."""
         self._quitting = True
+        if getattr(self, "hotkey", None):
+            self.hotkey.unregister()
+        if getattr(self, "tray", None):
+            self.tray.hide()
+        for widget in QApplication.topLevelWidgets():
+            widget.hide()
         QApplication.instance().quit()
 
     # ------------------------------------------------------------ updates
@@ -627,7 +656,7 @@ class MainWindow(QMainWindow):
         self.quit_app()
 
     def closeEvent(self, event):
-        if getattr(self, "tray", None) and not self._quitting:
+        if getattr(self, "tray", None) and not self._quitting and self.keep_running():
             event.ignore()
             self.hide()
             if not self._told_about_tray:
@@ -636,7 +665,8 @@ class MainWindow(QMainWindow):
                                       f"Click the tray icon or press {HOTKEY_TEXT} for a new address. "
                                       "Right-click it to quit.", app_icon(), 5000)
         else:
-            super().closeEvent(event)
+            event.accept()
+            self.quit_app()
 
     # ------------------------------------------------------------ sign in
 
@@ -726,6 +756,14 @@ class MainWindow(QMainWindow):
                 action.setShortcut(shortcut)
             action.triggered.connect(slot)
             self.toolbar.addAction(action)
+        self.keep_running_action = QAction("Keep running in the tray when closed", self, checkable=True)
+        self.keep_running_action.setChecked(self.keep_running())
+        self.keep_running_action.toggled.connect(self._set_keep_running)
+        options = QMenu("Options", self)
+        options.addAction(self.keep_running_action)
+        options_button = QToolButton(text="Options", popupMode=QToolButton.InstantPopup)
+        options_button.setMenu(options)
+        self.toolbar.addWidget(options_button)
 
         self.search = QLineEdit(placeholderText="Search address, label, note, website", clearButtonEnabled=True)
         self.search.textChanged.connect(self.refresh_list)
@@ -1139,6 +1177,23 @@ def selftest(out_dir: str) -> int:
 _KEEP_ALIVE: list = []
 
 
+def hard_exit(code: int):
+    """End the process now: background threads can't keep it alive, and no error dialog
+    can appear. On Windows this also skips unloading Qt's DLLs, which can crash on exit."""
+    sys.stdout.flush()
+    sys.stderr.flush()
+    if sys.platform == "win32":
+        import ctypes
+        from ctypes import wintypes
+
+        k32 = ctypes.windll.kernel32
+        # Declare the types: without them ctypes truncates the 64-bit process handle.
+        k32.GetCurrentProcess.restype = wintypes.HANDLE
+        k32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+        k32.TerminateProcess(k32.GetCurrentProcess(), code)
+    os._exit(code)
+
+
 def main() -> int:
     if "--selftest" in sys.argv:
         import faulthandler
@@ -1154,19 +1209,7 @@ def main() -> int:
                 f.write("CRASH:\n" + traceback.format_exc())
             code = 2
         faulthandler.cancel_dump_traceback_later()
-        sys.stdout.flush()
-        # Exit hard: no error dialog that could hang a headless runner. On Windows,
-        # skip DLL unload too, where Qt can crash after the test already passed.
-        if sys.platform == "win32":
-            import ctypes
-            from ctypes import wintypes
-
-            k32 = ctypes.windll.kernel32
-            # Declare the types: without them ctypes truncates the 64-bit process handle.
-            k32.GetCurrentProcess.restype = wintypes.HANDLE
-            k32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
-            k32.TerminateProcess(k32.GetCurrentProcess(), code)
-        os._exit(code)
+        hard_exit(code)
     record_start()
     if "--test-update" in sys.argv:
         # CI: start an installer exactly as "Restart to update" does, then quit.
@@ -1180,7 +1223,8 @@ def main() -> int:
     win.show()
     QTimer.singleShot(0, win.start)
     win.start_update_checks()
-    return app.exec()
+    code = app.exec()
+    hard_exit(code)
 
 
 if __name__ == "__main__":
