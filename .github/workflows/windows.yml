@@ -5,6 +5,16 @@ on:
     branches: [main]
   workflow_dispatch:
 
+env:
+  PYI_ARGS: >-
+    --noconfirm --onefile --paths .
+    --collect-submodules pyicloud
+    --collect-submodules keyring.backends
+    --collect-data pyicloud
+    --collect-data fido2
+    --copy-metadata pyicloud
+    --copy-metadata keyring
+
 jobs:
   build:
     runs-on: windows-latest
@@ -20,44 +30,13 @@ jobs:
         run: pip install -r windows/requirements.txt
 
       - name: Build HideMyEmail.exe
-        run: >
-          pyinstaller --noconfirm --onefile --windowed
-          --disable-windowed-traceback
-          --name HideMyEmail
-          --paths .
-          --collect-submodules pyicloud
-          --collect-submodules keyring.backends
-          --copy-metadata pyicloud
-          --copy-metadata keyring
-          windows/hide_my_email.py
+        shell: pwsh
+        run: pyinstaller $env:PYI_ARGS.Split(" ") --windowed --disable-windowed-traceback --name HideMyEmail windows/hide_my_email.py
 
       - uses: actions/upload-artifact@v4
         with:
           name: HideMyEmail-windows
           path: dist/HideMyEmail.exe
-
-      - name: Diagnose - self-test from source
-        if: always()
-        timeout-minutes: 3
-        shell: pwsh
-        run: |
-          $p = Start-Process python -ArgumentList "windows/hide_my_email.py", "--selftest", "diag-source" -PassThru -NoNewWindow -RedirectStandardError diag-source-err.txt
-          if (-not $p.WaitForExit(90000)) { Stop-Process -Id $p.Id -Force; "TIMEOUT" }
-          "exit: $($p.ExitCode)"
-          Get-Content diag-source\*.txt -ErrorAction SilentlyContinue
-          Get-Content diag-source-err.txt -ErrorAction SilentlyContinue
-
-      - name: Diagnose - console build
-        if: always()
-        timeout-minutes: 6
-        shell: pwsh
-        run: |
-          pyinstaller --noconfirm --onefile --console --name HideMyEmailDebug --paths . --collect-submodules pyicloud --collect-submodules keyring.backends --copy-metadata pyicloud --copy-metadata keyring --distpath dist-debug windows/hide_my_email.py *> $null
-          $p = Start-Process dist-debug\HideMyEmailDebug.exe -ArgumentList "--selftest", "diag-exe" -PassThru -NoNewWindow -RedirectStandardOutput diag-exe-out.txt -RedirectStandardError diag-exe-err.txt
-          if (-not $p.WaitForExit(90000)) { Stop-Process -Id $p.Id -Force; "TIMEOUT" }
-          "exit: $($p.ExitCode)"
-          Get-Content diag-exe\*.txt -ErrorAction SilentlyContinue
-          Get-Content diag-exe-out.txt, diag-exe-err.txt -ErrorAction SilentlyContinue
 
       - name: Self-test the .exe
         timeout-minutes: 5
@@ -67,11 +46,24 @@ jobs:
           if (-not $p.WaitForExit(120000)) {
             Stop-Process -Id $p.Id -Force
             Get-Process HideMyEmail -ErrorAction SilentlyContinue | Stop-Process -Force
-            if (Test-Path selftest\report.txt) { Get-Content selftest\report.txt }
+            Get-Content selftest\*.txt -ErrorAction SilentlyContinue
             throw "Self-test did not finish within 2 minutes"
           }
           Get-Content selftest\report.txt
           if ($p.ExitCode -ne 0) { throw "Self-test failed with exit code $($p.ExitCode)" }
+
+      # A windowed .exe can't print startup errors, so on failure rebuild as a
+      # console app and run it to show what went wrong.
+      - name: Diagnose with a console build
+        if: failure()
+        timeout-minutes: 6
+        shell: pwsh
+        run: |
+          pyinstaller $env:PYI_ARGS.Split(" ") --console --name HideMyEmailDebug --distpath dist-debug windows/hide_my_email.py *> $null
+          $p = Start-Process dist-debug\HideMyEmailDebug.exe -ArgumentList "--selftest", "diag" -PassThru -NoNewWindow -RedirectStandardOutput diag-out.txt -RedirectStandardError diag-err.txt
+          if (-not $p.WaitForExit(90000)) { Stop-Process -Id $p.Id -Force; "TIMEOUT" }
+          "exit: $($p.ExitCode)"
+          Get-Content diag\*.txt, diag-out.txt, diag-err.txt -ErrorAction SilentlyContinue
 
       - uses: actions/upload-artifact@v4
         if: always()
