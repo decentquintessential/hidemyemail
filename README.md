@@ -38,11 +38,9 @@ The app is a SwiftUI front end. A background helper (`hme_helper.py`) does the i
 `windows/hide_my_email.py` is a Qt (PySide6) version of the app, with the same features. GitHub Actions builds it into a single `HideMyEmail.exe` on every push to `main`, using `.github/workflows/windows.yml`. To get the latest build:
 
 1. Open the repository on GitHub and go to **Actions → Build Windows app**.
-2. Open the latest run and download the **HideMyEmail-windows** artifact. It's a zip with two files:
-   - `HideMyEmail-Setup.exe`, the installer (recommended). It installs for your user only, with no admin rights needed, adds a Start-menu shortcut, and offers a desktop shortcut and a "start when I sign in" option. You can uninstall it from Settings → Apps.
-   - `HideMyEmail.exe`, the app on its own, which runs without installing.
+2. Open the latest run and download the **HideMyEmail-windows** artifact. It's a zip containing `HideMyEmail-Setup.exe`, the installer. It installs for your user only, with no admin rights needed, adds a Start-menu shortcut, and offers a desktop shortcut and a "start when I sign in" option. You can uninstall it from Settings → Apps.
 
-Both files are unsigned, so Windows SmartScreen warns about them the first time. Click **More info → Run anyway**. Removing the warning would need a paid code-signing certificate.
+The installer is unsigned, so Windows SmartScreen warns about them the first time. Click **More info → Run anyway**. Removing the warning would need a paid code-signing certificate.
 
 The Windows app has the same features as the Mac app, including multi-select, Ctrl+C, Delete and a right-click menu. Instead of the menu bar it uses a **tray icon**: click it, or press **Ctrl+Alt+Shift+H** from any app, for the quick-create window. Closing the main window keeps the app running in the tray. To quit, right-click the tray icon.
 

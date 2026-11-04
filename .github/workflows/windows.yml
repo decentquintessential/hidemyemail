@@ -61,9 +61,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: HideMyEmail-windows
-          path: |
-            dist/HideMyEmail.exe
-            dist/HideMyEmail-Setup.exe
+          path: dist/HideMyEmail-Setup.exe
 
       - name: Self-test the .exe
         timeout-minutes: 5
