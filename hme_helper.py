@@ -4,17 +4,20 @@
 Speaks JSON lines over stdin/stdout: each request is
 {"id": 1, "cmd": "list", ...} and each reply is
 {"id": 1, "ok": true, "result": ...} or {"id": 1, "ok": false, "error": "..."}.
+"id" is only the request id; commands on one address take it as "alias_id".
 The iCloud session lives in this process, so 2FA can be a two-step exchange.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shutil
 import sys
 import time
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
 
@@ -57,10 +60,12 @@ def with_retry(fn, attempts: int = 3, reconnect=None):
             transient = '"errorCode":"500"' in text or "Try again later" in text
             if not transient or attempt == attempts - 1:
                 raise
+            logging.getLogger("hme").warning("attempt %d failed, retrying: %s", attempt + 1, text)
             match = re.search(r'"retryAfter":\s*(\d+)', text)
             time.sleep(max(int(match.group(1)) if match else 2, 2))
             if reconnect:
                 reconnect()
+                logging.getLogger("hme").info("reconnected to iCloud")
 
 
 class Backend:
@@ -171,20 +176,20 @@ class Backend:
 
     def cmd_update(self, req) -> dict[str, Any]:
         return self._checked(
-            lambda: self._hme().update_metadata(req["id"], req["label"], req.get("note")), "Saving"
+            lambda: self._hme().update_metadata(req["alias_id"], req["label"], req.get("note")), "Saving"
         )
 
     def cmd_deactivate(self, req) -> dict[str, Any]:
-        return self._checked(lambda: self._hme().deactivate(req["id"]), "Deactivating")
+        return self._checked(lambda: self._hme().deactivate(req["alias_id"]), "Deactivating")
 
     def cmd_reactivate(self, req) -> dict[str, Any]:
-        return self._checked(lambda: self._hme().reactivate(req["id"]), "Reactivating")
+        return self._checked(lambda: self._hme().reactivate(req["alias_id"]), "Reactivating")
 
     def cmd_delete(self, req) -> dict[str, Any]:
         # iCloud only deletes addresses that are already deactivated.
         if req.get("active"):
-            self._checked(lambda: self._hme().deactivate(req["id"]), "Deactivating")
-        return self._checked(lambda: self._hme().delete(req["id"]), "Deleting")
+            self._checked(lambda: self._hme().deactivate(req["alias_id"]), "Deactivating")
+        return self._checked(lambda: self._hme().delete(req["alias_id"]), "Deleting")
 
     def _checked(self, call, what: str) -> dict[str, Any]:
         try:
@@ -193,13 +198,15 @@ class Backend:
             if "Try again later" not in str(exc):
                 raise
             raise HelperError(
-                f"{what} failed: iCloud isn't accepting this change right now.\n\n"
-                "This usually happens when the address was created or changed in the "
-                "last few minutes. Try again in a few minutes."
+                f"{what} failed: iCloud kept answering \"Something went wrong, try again later\". "
+                "Try again in a few minutes."
             ) from exc
         if not result:
             raise HelperError(f"{what} failed (iCloud returned no result).")
         return result
+
+
+ALIAS_COMMANDS = {"update", "deactivate", "reactivate", "delete"}
 
 
 def reply(payload: dict[str, Any]) -> None:
@@ -207,8 +214,21 @@ def reply(payload: dict[str, Any]) -> None:
     PROTOCOL_OUT.flush()
 
 
+def setup_log() -> logging.Logger:
+    """Log requests and iCloud's raw errors to APP_DIR/helper.log (no passwords)."""
+    APP_DIR.mkdir(parents=True, exist_ok=True)
+    handler = RotatingFileHandler(APP_DIR / "helper.log", maxBytes=1_000_000, backupCount=1)
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    log = logging.getLogger("hme")
+    log.addHandler(handler)
+    log.setLevel(logging.INFO)
+    return log
+
+
 def main() -> None:
     sys.stdout = sys.stderr
+    log = setup_log()
+    log.info("helper started (pid %s, python %s)", os.getpid(), sys.version.split()[0])
     backend = Backend()
     for line in sys.stdin:
         if not line.strip():
@@ -217,13 +237,21 @@ def main() -> None:
         try:
             req = json.loads(line)
             req_id = req.get("id")
+            safe = {k: v for k, v in req.items() if k != "password"}
+            log.info("request %s", safe)
             handler = getattr(backend, f"cmd_{req.get('cmd')}", None)
             if handler is None:
                 raise HelperError(f"Unknown command {req.get('cmd')!r}.")
+            # "id" is the request id; the address goes in "alias_id". Never send iCloud a guess.
+            if req.get("cmd") in ALIAS_COMMANDS and not req.get("alias_id"):
+                raise HelperError(f"Internal error: {req.get('cmd')} request is missing alias_id.")
             reply({"id": req_id, "ok": True, "result": handler(req)})
+            log.info("request %s ok", req_id)
         except HelperError as exc:
+            log.warning("request %s failed: %s", req_id, exc, exc_info=exc.__cause__ is not None)
             reply({"id": req_id, "ok": False, "error": str(exc)})
         except Exception as exc:  # surface anything from pyicloud to the UI
+            log.exception("request %s failed", req_id)
             reply({"id": req_id, "ok": False, "error": f"{type(exc).__name__}: {exc}"})
 
 

@@ -499,7 +499,7 @@ class MainWindow(QMainWindow):
 
     def save_detail(self):
         a = self.current()
-        params = {"id": a["anonymousId"], "label": self.d_label.text().strip(), "note": self.d_note.toPlainText()}
+        params = {"alias_id": a["anonymousId"], "label": self.d_label.text().strip(), "note": self.d_note.toPlainText()}
 
         def ok(_):
             self.statusBar().showMessage("Saved", 2500)
@@ -512,9 +512,9 @@ class MainWindow(QMainWindow):
         if a.get("isActive", True):
             if QMessageBox.question(self, "Deactivate", f"Stop forwarding mail from {a['hme']}?") != QMessageBox.Yes:
                 return
-            fn = lambda: self.backend.cmd_deactivate({"id": a["anonymousId"]})
+            fn = lambda: self.backend.cmd_deactivate({"alias_id": a["anonymousId"]})
         else:
-            fn = lambda: self.backend.cmd_reactivate({"id": a["anonymousId"]})
+            fn = lambda: self.backend.cmd_reactivate({"alias_id": a["anonymousId"]})
         self.run(fn, lambda _: self.reload(), on_error=self.reload)
 
     def delete_alias(self):
@@ -525,7 +525,7 @@ class MainWindow(QMainWindow):
         box.addButton("Delete permanently", QMessageBox.DestructiveRole)
         if box.exec() == QMessageBox.Cancel:
             return
-        params = {"id": a["anonymousId"], "active": a.get("isActive", True)}
+        params = {"alias_id": a["anonymousId"], "active": a.get("isActive", True)}
         # On failure, reload anyway: deactivation may have succeeded before deleting failed.
         self.run(lambda: self.backend.cmd_delete(params), lambda _: self.reload(), on_error=self.reload)
 

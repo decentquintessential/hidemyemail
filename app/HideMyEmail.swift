@@ -73,7 +73,9 @@ final class Helper {
     deinit { process.terminate() }
 
     func call(_ cmd: String, _ params: [String: Any] = [:]) async throws -> Any {
-        try await withCheckedThrowingContinuation { cont in
+        // "id" and "cmd" belong to the protocol; an address id goes in "alias_id".
+        precondition(params["id"] == nil && params["cmd"] == nil, "reserved key in params")
+        return try await withCheckedThrowingContinuation { cont in
             lock.lock()
             let id = nextId
             nextId += 1
@@ -255,7 +257,7 @@ final class AppModel: ObservableObject {
 
     func save(_ alias: Alias, label: String, note: String) async {
         await run {
-            _ = try await self.helper!.call("update", ["id": alias.id, "label": label, "note": note])
+            _ = try await self.helper!.call("update", ["alias_id": alias.id, "label": label, "note": note])
             try await self.reloadThrowing()
             self.flash("Saved")
         }
@@ -263,7 +265,7 @@ final class AppModel: ObservableObject {
 
     func setActive(_ alias: Alias, _ active: Bool) async {
         await run {
-            _ = try await self.helper!.call(active ? "reactivate" : "deactivate", ["id": alias.id])
+            _ = try await self.helper!.call(active ? "reactivate" : "deactivate", ["alias_id": alias.id])
             try await self.reloadThrowing()
         } onError: {
             Task { try? await self.reloadThrowing() }
@@ -272,7 +274,7 @@ final class AppModel: ObservableObject {
 
     func delete(_ alias: Alias) async {
         await run {
-            _ = try await self.helper!.call("delete", ["id": alias.id, "active": alias.isActive])
+            _ = try await self.helper!.call("delete", ["alias_id": alias.id, "active": alias.isActive])
             self.selection = nil
             try await self.reloadThrowing()
         } onError: {
