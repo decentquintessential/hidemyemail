@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+app/Hide My Email.app/
+dist/
+build/
+*.spec
+selftest/
+.DS_Store

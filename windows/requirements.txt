@@ -1,0 +1,3 @@
+pyicloud>=2026.10.1
+PySide6>=6.8
+pyinstaller>=6.11

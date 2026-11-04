@@ -1,0 +1,48 @@
+name: Build Windows app
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: pip install -r windows/requirements.txt
+
+      - name: Build HideMyEmail.exe
+        run: >
+          pyinstaller --noconfirm --onefile --windowed
+          --name HideMyEmail
+          --paths .
+          --collect-submodules pyicloud
+          --collect-submodules keyring.backends
+          --copy-metadata pyicloud
+          --copy-metadata keyring
+          windows/hide_my_email.py
+
+      - name: Self-test the .exe
+        shell: pwsh
+        run: |
+          $p = Start-Process dist\HideMyEmail.exe -ArgumentList "--selftest", "selftest" -Wait -PassThru
+          Get-Content selftest\report.txt
+          if ($p.ExitCode -ne 0) { throw "Self-test failed with exit code $($p.ExitCode)" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: HideMyEmail-windows
+          path: dist/HideMyEmail.exe
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: selftest
+          path: selftest/
