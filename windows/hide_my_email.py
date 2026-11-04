@@ -7,9 +7,16 @@ Run with --selftest [screenshot.png] to check the build without logging in.
 from __future__ import annotations
 
 import csv
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
+
+# A windowed .exe has no stdout/stderr; pyicloud calls sys.stdout.isatty() on import.
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, "w")
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, "w")
 
 if "--selftest" in sys.argv:
     # Dump every thread's stack if startup hangs, so a CI run shows where.
@@ -554,7 +561,7 @@ def selftest(out_dir: str) -> int:
     """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    report = (out / "report.txt").open("w")
+    report = (out / "report.txt").open("w", buffering=1)
     import keyring
     import pyicloud  # noqa: F401
     from pyicloud.services.hidemyemail import HideMyEmailService  # noqa: F401
@@ -576,12 +583,15 @@ def selftest(out_dir: str) -> int:
     win.grab().save(str(out / "screenshot.png"))
     report.write("selftest ok\n")
     report.close()
+    win.close()
+    del win
+    app.processEvents()
     return 0
 
 
 def main() -> int:
     if "--selftest" in sys.argv:
-        import os
+        import faulthandler
         import traceback
 
         i = sys.argv.index("--selftest")
@@ -593,7 +603,9 @@ def main() -> int:
             with (Path(out_dir) / "report.txt").open("a") as f:
                 f.write("CRASH:\n" + traceback.format_exc())
             code = 2
-        # Exit hard: no Qt teardown and no error dialog that could hang a headless runner.
+        faulthandler.cancel_dump_traceback_later()
+        # Exit hard: no error dialog that could hang a headless runner.
+        sys.stdout.flush()
         os._exit(code)
     app = QApplication(sys.argv)
     app.setApplicationName("Hide My Email")
