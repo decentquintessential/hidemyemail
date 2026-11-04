@@ -24,9 +24,9 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
 
@@ -76,7 +76,7 @@ jobs:
           "Update install reopened the app (pid $($running[0].Id))"
           $running | Stop-Process -Force
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: HideMyEmail-windows
           path: dist/HideMyEmail-Setup.exe
@@ -108,7 +108,7 @@ jobs:
           "exit: $($p.ExitCode)"
           Get-Content diag\*.txt, diag-out.txt, diag-err.txt -ErrorAction SilentlyContinue
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: selftest
@@ -118,9 +118,9 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
 
@@ -154,7 +154,7 @@ jobs:
       - name: Name the download
         run: mkdir -p dist && mv "app/Hide My Email.dmg" dist/HideMyEmail-Mac.dmg
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: HideMyEmail-mac
           path: dist/HideMyEmail-Mac.dmg
@@ -167,7 +167,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: HideMyEmail-*
           merge-multiple: true
