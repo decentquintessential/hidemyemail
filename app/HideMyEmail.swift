@@ -620,6 +620,18 @@ struct MainView: View {
             .safeAreaInset(edge: .top, spacing: 0) {
                 VStack(spacing: 0) {
                     HStack {
+                        Menu {
+                            Picker("Show", selection: $model.filter) {
+                                ForEach(Filter.allCases) { Text($0.rawValue).tag($0) }
+                            }
+                            .pickerStyle(.inline)
+                        } label: {
+                            Label(model.filter.rawValue, systemImage: "line.3.horizontal.decrease.circle")
+                                .font(.callout)
+                        }
+                        .menuStyle(.borderlessButton)
+                        .fixedSize()
+                        .help("Show active, inactive, all or Sign in with Apple addresses")
                         Spacer()
                         Menu {
                             Picker("Sort By", selection: $model.sort) {
@@ -653,18 +665,9 @@ struct MainView: View {
                 .background(.bar)
             }
         } detail: {
-            if let alias = model.selected, alias.isSiwa {
-                SiwaDetail(alias: alias).id(alias.id)
-            } else if let alias = model.selected {
-                AliasDetail(alias: alias).id(alias.id)
-            } else if model.filter == .siwa && model.siwaState != .ready {
-                SiwaConnectView()
-            } else if model.selection.count > 1 {
-                BatchDetail(aliases: model.selectedAliases, onDelete: { pendingDelete = $0 })
-            } else {
-                ContentUnavailableView("No address selected", systemImage: "envelope",
-                                       description: Text("Pick an address, or press ⌘N to create one.\n⌘-click or ⇧-click to select several."))
-            }
+            detailContent
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .safeAreaInset(edge: .top, spacing: 0) { UpdateBanner() }
         }
         .confirmationDialog(deleteTitle, isPresented: Binding(
             get: { !pendingDelete.isEmpty },
@@ -680,12 +683,6 @@ struct MainView: View {
         }
         .searchable(text: $model.search, placement: .sidebar, prompt: "Search addresses, labels, notes, websites")
         .toolbar {
-            ToolbarItem(placement: .navigation) {
-                Picker("Show", selection: $model.filter) {
-                    ForEach(Filter.allCases) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.segmented)
-            }
             ToolbarItemGroup {
                 if model.busy { ProgressView().controlSize(.small) }
                 Button { Task { await model.reload() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
@@ -705,7 +702,6 @@ struct MainView: View {
             }
         }
         .sheet(isPresented: $showingNew) { NewAliasSheet() }
-        .safeAreaInset(edge: .top, spacing: 0) { UpdateBanner() }
         .overlay(alignment: .bottom) {
             if let toast = model.toast {
                 Text(toast)
@@ -716,6 +712,21 @@ struct MainView: View {
             }
         }
         .animation(.easeInOut, value: model.toast)
+    }
+
+    @ViewBuilder private var detailContent: some View {
+        if let alias = model.selected, alias.isSiwa {
+            SiwaDetail(alias: alias).id(alias.id)
+        } else if let alias = model.selected {
+            AliasDetail(alias: alias).id(alias.id)
+        } else if model.filter == .siwa && model.siwaState != .ready {
+            SiwaConnectView()
+        } else if model.selection.count > 1 {
+            BatchDetail(aliases: model.selectedAliases, onDelete: { pendingDelete = $0 })
+        } else {
+            ContentUnavailableView("No address selected", systemImage: "envelope",
+                                   description: Text("Pick an address, or press ⌘N to create one.\n⌘-click or ⇧-click to select several."))
+        }
     }
 
     private var deleteTitle: String {
@@ -1326,7 +1337,9 @@ struct UpdateBanner: View {
         if let ready = updater.ready, !updater.dismissed {
             HStack(spacing: 12) {
                 Image(systemName: "arrow.down.circle.fill").foregroundStyle(.tint)
-                Text("Hide My Email \(ready.version) is ready to install (you have \(updater.current)).")
+                Text("Version \(ready.version) is ready to install.")
+                    .lineLimit(1)
+                    .help("You have version \(updater.current).")
                 Spacer()
                 Button("Later") { updater.dismissed = true }.buttonStyle(.borderless)
                 Button("Restart to Update") { updater.install() }.buttonStyle(.borderedProminent)
@@ -1417,6 +1430,7 @@ extension AppModel {
         ].map(Alias.init)
         phase = .ready
         filter = .all
+        Updater.shared.ready = .init(version: "1.0.39", dmg: URL(fileURLWithPath: "/tmp/preview.dmg"))
     }
 }
 
@@ -1433,7 +1447,7 @@ enum SnapshotMain {
         var keep: [NSWindow] = []
         var keepSiwa: [Alias] = []
         let shots: [(String, NSSize, Set<String>, AnyView)] = [
-            ("main", NSSize(width: 1040, height: 680), ["a"], AnyView(MainView())),
+            ("main", NSSize(width: 900, height: 620), ["a"], AnyView(MainView())),
             ("inactive", NSSize(width: 1040, height: 680), ["c"], AnyView(MainView())),
             ("batch", NSSize(width: 1040, height: 680), ["a", "b", "c"], AnyView(MainView())),
             ("empty", NSSize(width: 1040, height: 680), [], AnyView(MainView())),
