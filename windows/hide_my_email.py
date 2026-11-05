@@ -1628,6 +1628,9 @@ def main() -> int:
         faulthandler.cancel_dump_traceback_later()
         hard_exit(code)
     record_start()
+    from hme_helper import setup_log
+
+    setup_log()
     if "--test-update" in sys.argv:
         # CI: start an installer exactly as "Restart to update" does, then quit.
         launch_installer(Path(sys.argv[sys.argv.index("--test-update") + 1]).resolve())

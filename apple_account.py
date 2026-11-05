@@ -133,21 +133,35 @@ class AppleAccount:
                                "If you changed your Apple ID password, sign out and in again.")
         self._open_api()
 
-    def verify_code(self, code: str) -> None:
+    def verify_code(self, code: str, apple_id: str, password: str) -> None:
         r = self._keep(self.http.post(f"{AUTH}/verify/trusteddevice/securitycode", headers=self._auth_headers(),
                                       json={"securityCode": {"code": code.strip()}}))
         log.info("apple account verify code: HTTP %s", r.status_code)
         if r.status_code not in (200, 204):
             raise AccountError("That code wasn't accepted. Check the code and try again.")
-        self._keep(self.http.get(f"{AUTH}/2sv/trust", headers=self._auth_headers()))
-        self._open_api()
+        r = self._keep(self.http.get(f"{AUTH}/2sv/trust", headers=self._auth_headers()))
+        log.info("apple account trust: HTTP %s, trust token: %s", r.status_code, bool(self.trust_token))
+        self._save()
+        if self._open_api(raise_on_failure=False):
+            return
+        # The code makes this device trusted, but the account session only opens after a
+        # fresh sign-in that presents the new trust token (Apple doesn't ask for a code again).
+        log.info("apple account: signing in again with the trust token")
+        try:
+            self.sign_in(apple_id, password)
+        except CodeRequired:
+            raise AccountError("Apple asked for another verification code. Wait a minute, then try "
+                               "Connect Apple Account again.") from None
 
-    def _open_api(self) -> None:
+    def _open_api(self, raise_on_failure: bool = True) -> bool:
         r = self._keep(self.http.get(f"{API}/account/manage/gs/ws/token", headers=self._api_headers()))
         log.info("apple account session: HTTP %s", r.status_code)
         if r.status_code != 200:
-            raise AccountError(f"Apple didn't open the account session (HTTP {r.status_code}).")
+            if raise_on_failure:
+                raise AccountError(f"Apple didn't open the account session (HTTP {r.status_code}).")
+            return False
         self._save()
+        return True
 
     # ------------------------------------------------------------ data
 

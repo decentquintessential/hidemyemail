@@ -184,7 +184,7 @@ class Backend:
     def cmd_account_verify(self, req) -> dict[str, Any]:
         account = self._apple_account()
         try:
-            account.verify_code(str(req.get("code", "")))
+            account.verify_code(str(req.get("code", "")), self.apple_id, self.password)
             data = account.private_emails()
             if data is None:
                 raise AccountError("Apple accepted the code but didn't return the list.")
