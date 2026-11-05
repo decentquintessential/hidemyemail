@@ -19,6 +19,7 @@ import base64
 import json
 import logging
 import pickle
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,8 @@ API = "https://appleid.apple.com"
 USER_AGENT = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 "
               "(KHTML, like Gecko) Version/18.3.1 Safari/605.1.15")
 RELAY_DOMAINS = ("privaterelay.appleid.com", "private.icloud.com")
+# Headers Apple sends during sign-in that must be sent back on every following step.
+ECHO_HEADERS = ("scnt", "X-Apple-ID-Session-Id", "X-Apple-Auth-Attributes")
 
 log = logging.getLogger("hme")
 
@@ -50,11 +53,15 @@ class AppleAccount:
     def __init__(self, state_file: Path):
         self.state_file = state_file
         self.http = requests.Session()
+        self.frame_id = f"auth-{uuid.uuid4()}"
         self.http.headers.update({
             "User-Agent": USER_AGENT,
             "Accept": "application/json, text/javascript",
             "Content-Type": "application/json",
             "X-Apple-Widget-Key": WIDGET_KEY,
+            "X-Apple-Frame-Id": self.frame_id,
+            "X-Apple-FD-Client-Info": json.dumps(
+                {"U": USER_AGENT, "L": "en-US", "Z": "GMT+00:00", "V": "1.1", "F": ""}, separators=(",", ":")),
             "X-Requested-With": "XMLHttpRequest",
         })
         self.trust_token: str | None = None
@@ -67,7 +74,7 @@ class AppleAccount:
             state = pickle.loads(self.state_file.read_bytes())
             self.http.cookies.update(state["cookies"])
             self.trust_token = state.get("trust_token")
-            for header in ("scnt", "X-Apple-ID-Session-Id"):
+            for header in ECHO_HEADERS:
                 if state.get(header):
                     self.http.headers[header] = state[header]
         except (FileNotFoundError, KeyError, pickle.UnpicklingError, EOFError):
@@ -75,9 +82,8 @@ class AppleAccount:
 
     def _save(self) -> None:
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
-        state = {"cookies": self.http.cookies, "trust_token": self.trust_token,
-                 "scnt": self.http.headers.get("scnt"),
-                 "X-Apple-ID-Session-Id": self.http.headers.get("X-Apple-ID-Session-Id")}
+        state = {"cookies": self.http.cookies, "trust_token": self.trust_token}
+        state.update({h: self.http.headers.get(h) for h in ECHO_HEADERS})
         self.state_file.write_bytes(pickle.dumps(state))
         self.state_file.chmod(0o600)
 
@@ -86,12 +92,17 @@ class AppleAccount:
         self.http.cookies.clear()
         self.trust_token = None
 
-    def _keep(self, response: requests.Response) -> requests.Response:
-        for header in ("scnt", "X-Apple-ID-Session-Id"):
+    def _keep(self, response: requests.Response, step: str = "") -> requests.Response:
+        for header in ECHO_HEADERS:
             if response.headers.get(header):
                 self.http.headers[header] = response.headers[header]
         if response.headers.get("X-Apple-TwoSV-Trust-Token"):
             self.trust_token = response.headers["X-Apple-TwoSV-Trust-Token"]
+        if step:
+            # Names only, never values: enough to see what Apple did at each step.
+            apple_headers = sorted(h for h in response.headers if h.lower().startswith(("x-apple", "scnt")))
+            log.info("apple account %s: HTTP %s | headers: %s | cookies: %s", step, response.status_code,
+                     apple_headers, sorted({c.name for c in self.http.cookies}))
         return response
 
     def _auth_headers(self) -> dict[str, str]:
@@ -102,15 +113,21 @@ class AppleAccount:
 
     # ------------------------------------------------------------ sign-in
 
-    def sign_in(self, apple_id: str, password: str) -> None:
-        """Sign in; raises CodeRequired when Apple wants a 2FA code (it's sent to your devices)."""
+    def sign_in(self, apple_id: str, password: str, request_code: bool = True) -> None:
+        """Sign in; raises CodeRequired when Apple wants a 2FA code (sent to your devices when
+        request_code is true; otherwise no new code is sent)."""
+        # Open the sign-in page the way the account site's widget frame does.
+        self._keep(self.http.get(f"{AUTH}/signin", headers={"Accept": "text/html"}, params={
+            "widgetKey": WIDGET_KEY, "language": "en_US", "skVersion": "7", "iframeId": self.frame_id,
+            "authVersion": "8.0.2"}), "signin page")
         srp_password = SrpPassword(password)
         srp.rfc5054_enable()
         srp.no_username_in_x()
         user = srp.User(apple_id, srp_password, hash_alg=srp.SHA256, ng_type=srp.NG_2048)
         name, a = user.start_authentication()
         r = self._keep(self.http.post(f"{AUTH}/signin/init", headers=self._auth_headers(), json={
-            "a": b64_encode(a), "accountName": name, "protocols": [p.value for p in SrpProtocolType]}))
+            "a": b64_encode(a), "accountName": name, "protocols": [p.value for p in SrpProtocolType]}),
+            "signin/init")
         if r.status_code != 200:
             log.warning("apple account signin/init: HTTP %s", r.status_code)
             raise AccountError(f"Apple didn't accept the sign-in (step 1, HTTP {r.status_code}).")
@@ -121,11 +138,12 @@ class AppleAccount:
         r = self._keep(self.http.post(
             f"{AUTH}/signin/complete", params={"isRememberMeEnabled": "true"}, headers=self._auth_headers(),
             json={"accountName": name, "c": body["c"], "m1": b64_encode(m1), "m2": b64_encode(user.H_AMK),
-                  "rememberMe": True, "trustTokens": [self.trust_token] if self.trust_token else []}))
-        log.info("apple account signin/complete: HTTP %s", r.status_code)
+                  "rememberMe": True, "trustTokens": [self.trust_token] if self.trust_token else []}),
+            f"signin/complete (trust token sent: {bool(self.trust_token)})")
         if r.status_code == 409:
-            # Ask Apple to send a code to the trusted devices.
-            self._keep(self.http.get(AUTH, headers=self._auth_headers()))
+            if request_code:
+                # Ask Apple to send a code to the trusted devices.
+                self._keep(self.http.get(AUTH, headers=self._auth_headers()), "request code")
             self._save()
             raise CodeRequired()
         if r.status_code != 200:
@@ -135,12 +153,18 @@ class AppleAccount:
 
     def verify_code(self, code: str, apple_id: str, password: str) -> None:
         r = self._keep(self.http.post(f"{AUTH}/verify/trusteddevice/securitycode", headers=self._auth_headers(),
-                                      json={"securityCode": {"code": code.strip()}}))
-        log.info("apple account verify code: HTTP %s", r.status_code)
-        if r.status_code not in (200, 204):
+                                      json={"securityCode": {"code": code.strip()}}), "verify code")
+        valid = r.status_code in (200, 204)
+        if r.status_code == 409:  # newer flow: 409 with a "valid" flag in the body
+            try:
+                valid = bool((r.json().get("securityCode") or {}).get("valid"))
+            except ValueError:
+                valid = False
+        if not valid:
             raise AccountError("That code wasn't accepted. Check the code and try again.")
-        r = self._keep(self.http.get(f"{AUTH}/2sv/trust", headers=self._auth_headers()))
-        log.info("apple account trust: HTTP %s, trust token: %s", r.status_code, bool(self.trust_token))
+        self._keep(self.http.get(f"{AUTH}/2sv/trust", headers=self._auth_headers()),
+                   "trust")
+        log.info("apple account trust token received: %s", bool(self.trust_token))
         self._save()
         if self._open_api(raise_on_failure=False):
             return
@@ -148,14 +172,16 @@ class AppleAccount:
         # fresh sign-in that presents the new trust token (Apple doesn't ask for a code again).
         log.info("apple account: signing in again with the trust token")
         try:
-            self.sign_in(apple_id, password)
+            self.sign_in(apple_id, password, request_code=False)  # never trigger another code here
         except CodeRequired:
-            raise AccountError("Apple asked for another verification code. Wait a minute, then try "
-                               "Connect Apple Account again.") from None
+            raise AccountError(
+                "Apple accepted the code but still didn't open the account session. No new code was "
+                "requested. Please send the last lines of the app's log (helper.log) so this can be fixed."
+            ) from None
 
     def _open_api(self, raise_on_failure: bool = True) -> bool:
-        r = self._keep(self.http.get(f"{API}/account/manage/gs/ws/token", headers=self._api_headers()))
-        log.info("apple account session: HTTP %s", r.status_code)
+        r = self._keep(self.http.get(f"{API}/account/manage/gs/ws/token", headers=self._api_headers()),
+                       "open session")
         if r.status_code != 200:
             if raise_on_failure:
                 raise AccountError(f"Apple didn't open the account session (HTTP {r.status_code}).")
@@ -167,8 +193,8 @@ class AppleAccount:
 
     def private_emails(self) -> dict[str, Any] | None:
         """The site's Hide My Email data, or None when the saved session has expired."""
-        r = self._keep(self.http.get(f"{API}/account/manage/email/private", headers=self._api_headers()))
-        log.info("apple account email/private: HTTP %s", r.status_code)
+        r = self._keep(self.http.get(f"{API}/account/manage/email/private", headers=self._api_headers()),
+                       "email/private")
         if r.status_code in (401, 403):
             return None
         if r.status_code != 200:
