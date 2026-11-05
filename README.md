@@ -82,8 +82,8 @@ If you want the shortcut to work all the time, switch on **Options → Keep runn
 
 ### Find, sort and filter
 
-- Type in the search box to search addresses, labels, notes and websites.
-- Choose whether to show **Active**, **Inactive** or **All** addresses: with the buttons under the search box on Windows, or at the top of the window on a Mac.
+- Type in the search box to search addresses, labels, notes and websites. A search always looks through **all** your addresses, whichever filter is selected.
+- Choose whether to show **Active**, **Inactive** or **All** addresses (these include your Sign in with Apple addresses once connected, marked with an Apple tag), or only the **Sign in with Apple** ones: with the buttons under the search box on Windows, or at the top of the window on a Mac.
 - **Sort** (above the list) orders the list by **Newest first**, **Oldest first**, **Name A–Z** or **Name Z–A**. "Name" is the label, and addresses without a label go at the bottom. The app remembers your choice.
 
 ### Edit, deactivate or delete

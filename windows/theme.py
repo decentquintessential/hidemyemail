@@ -197,19 +197,20 @@ class AliasDelegate(QStyledItemDelegate):
         left = rect.left() + 14
         right = rect.right() - 12
 
-        # "Inactive" tag on the right.
-        if not active:
+        # Tags on the right: "Inactive", and "Apple" for Sign in with Apple addresses.
+        for text, show in (("Inactive", not active), ("Apple", alias.get("siwa"))):
+            if not show:
+                continue
             tag_font = ui_font(8, QFont.DemiBold)
-            fm = QFontMetrics(tag_font)
-            w = fm.horizontalAdvance("Inactive") + 16
+            w = QFontMetrics(tag_font).horizontalAdvance(text) + 16
             tag = QRectF(right - w, rect.center().y() - 10, w, 20)
             path = QPainterPath()
             path.addRoundedRect(tag, 10, 10)
             painter.fillPath(path, QColor(t("neutral_soft")))
             painter.setFont(tag_font)
             painter.setPen(QColor(t("muted")))
-            painter.drawText(tag, Qt.AlignCenter, "Inactive")
-            right -= w + 10
+            painter.drawText(tag, Qt.AlignCenter, text)
+            right -= w + 6
 
         label = alias.get("label") or "No label"
         title_font = ui_font(10.5, QFont.DemiBold)

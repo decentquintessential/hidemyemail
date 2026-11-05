@@ -1259,10 +1259,12 @@ class MainWindow(QMainWindow):
     def visible(self) -> list[dict]:
         mode = self.filter.currentText()
         q = self.search.text().lower()
-        source = self.siwa if mode == SIWA else self.aliases
+        # Active, Inactive and All cover every address (iCloud and Sign in with Apple);
+        # the Sign in with Apple filter shows only those. A search looks through everything.
+        source = self.siwa if mode == SIWA and not q else self.aliases + self.siwa
         shown = [
             a for a in source
-            if (mode in ("All", SIWA) or a.get("isActive", True) == (mode == "Active"))
+            if (q or mode in ("All", SIWA) or a.get("isActive", True) == (mode == "Active"))
             and (not q or any(q in (a.get(k) or "").lower() for k in ("hme", "label", "note"))
                  or q in origin_text(a).lower())
         ]
@@ -1296,7 +1298,8 @@ class MainWindow(QMainWindow):
     def show_detail(self, *_):
         chosen = self.selected()
         shown = self.list.count()
-        total = len(self.siwa if self.filter.currentText() == SIWA else self.aliases)
+        searching = bool(self.search.text().strip())
+        total = len(self.siwa if self.filter.currentText() == SIWA and not searching else self.aliases + self.siwa)
         self.count.setText(f"{len(chosen)} selected  ·  {shown} of {plural(total)}"
                            if len(chosen) > 1 else f"{shown} of {plural(total)}")
         if len(chosen) > 1:
@@ -1553,6 +1556,16 @@ def selftest(out_dir: str) -> int:
     report.write("sign in with apple view ok\n")
     win.filter.setCurrentText("All")
     app.processEvents()
+    assert win.list.count() == len(SAMPLE) + len(SAMPLE_SIWA), win.list.count()
+    win.filter.setCurrentText("Active")
+    win.search.setText("airbnb")  # inactive and Sign in with Apple, found from the Active filter
+    app.processEvents()
+    assert [a["label"] for a in win.visible()] == ["Airbnb"], win.visible()
+    win.search.clear()
+    win.filter.setCurrentText("All")
+    app.processEvents()
+    win.grab().save(str(out / "all.png"))
+    report.write("filters and search cover every address\n")
 
     win.quick.popup()
     app.processEvents()

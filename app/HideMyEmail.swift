@@ -223,9 +223,13 @@ final class AppModel: ObservableObject {
     func shutdown() { helper?.stop() }
     private var started = false
 
+    /// Active, Inactive and All cover every address (iCloud and Sign in with Apple);
+    /// "Sign in with Apple" shows only those. A search always looks through everything.
     var visible: [Alias] {
-        (filter == .siwa ? siwa : aliases)
+        let searching = !search.isEmpty
+        return (filter == .siwa && !searching ? siwa : aliases + siwa)
             .filter {
+                if searching { return true }
                 switch filter {
                 case .active: return $0.isActive
                 case .inactive: return !$0.isActive
@@ -251,7 +255,7 @@ final class AppModel: ObservableObject {
     }
 
     /// Total in the current source, for "x of y addresses".
-    var sourceCount: Int { filter == .siwa ? siwa.count : aliases.count }
+    var sourceCount: Int { filter == .siwa && search.isEmpty ? siwa.count : aliases.count + siwa.count }
 
     func start() async {
         // The window, menu bar panel and hotkey panel all call this; connect once.
@@ -799,6 +803,12 @@ struct AliasRow: View {
                     .truncationMode(.middle)
             }
             Spacer(minLength: 4)
+            if alias.isSiwa {
+                Image(systemName: "apple.logo")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .help("Made with Sign in with Apple")
+            }
             if !alias.isActive { StatusBadge(active: false, compact: true) }
         }
         .padding(.vertical, 5)
