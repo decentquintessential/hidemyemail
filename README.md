@@ -100,6 +100,14 @@ Ctrl-click or Shift-click to select several addresses (⌘-click or ⇧-click on
 
 ![Several addresses selected](docs/windows-multiselect.png)
 
+### Sign in with Apple addresses
+
+When you use **Sign in with Apple** and choose "Hide My Email", Apple creates a relay address ending in `@privaterelay.appleid.com`. Apple keeps those in your **Apple Account**, not in iCloud's Hide My Email list, which is why your iPhone may show more addresses than the main list here.
+
+To see them, choose **Sign in with Apple** next to Active, Inactive and All, then click **Connect Apple Account**. The app signs in to your Apple Account with the password it already stores; the first time, Apple may send a verification code to your devices. After that the app remembers the connection. To remove it, choose **Options → Disconnect Apple Account** (**⋯ → Disconnect Apple Account** on a Mac).
+
+These addresses are shown **read-only**, with the app or website they belong to, so you can find and copy them. To stop forwarding or stop using Sign in with Apple for an app, use **Open Apple Account settings** in the details.
+
 ### Keyboard shortcuts
 
 | Action | Windows | Mac |
@@ -128,6 +136,7 @@ To see which version you have: on Windows it's shown at the bottom right of the 
 ## Good to know
 
 - **Creation limits:** Apple limits how many addresses you can create in a short time. If creating fails, try again in an hour.
+- **Sign in with Apple:** the app reads these addresses the way Apple's own account website does. Apple doesn't document this, so a change on Apple's side could stop that part working until the app is updated.
 - **No "last used" date:** iCloud doesn't record when an address last received mail, so the app can't show it.
 - **Forwarding address:** to change which inbox your addresses forward to, use your iPhone or Mac settings. The app shows the current forwarding address but can't change it.
 - **Possible breakage:** because Apple has no official connection for Hide My Email, a change on Apple's side could stop the app working until it's updated.

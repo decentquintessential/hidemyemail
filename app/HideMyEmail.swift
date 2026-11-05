@@ -17,6 +17,8 @@ struct Alias: Identifiable, Hashable {
     let forwardTo: String
     /// Where the address was made: "Safari — example.com", "Created by hand", or an app name.
     let origin: String
+    /// Made with Sign in with Apple; read from the Apple Account site and read-only here.
+    let isSiwa: Bool
 
     init(_ d: [String: Any]) {
         id = d["anonymousId"] as? String ?? UUID().uuidString
@@ -30,6 +32,7 @@ struct Alias: Identifiable, Hashable {
             created = nil
         }
         forwardTo = d["forwardToEmail"] as? String ?? ""
+        isSiwa = d["siwa"] as? Bool ?? false
 
         let kind = d["origin"] as? String ?? ""
         let domain = d["domain"] as? String ?? ""
@@ -38,6 +41,7 @@ struct Alias: Identifiable, Hashable {
         switch kind {
         case "SAFARI": source = "Safari"
         case "ON_DEMAND": source = "Created by hand"
+        case "SIGN_IN_WITH_APPLE": source = "Sign in with Apple"
         case "": source = ""
         default: source = appName.isEmpty ? kind.capitalized : appName
         }
@@ -169,7 +173,7 @@ enum Phase {
 }
 
 enum Filter: String, CaseIterable, Identifiable {
-    case active = "Active", inactive = "Inactive", all = "All"
+    case active = "Active", inactive = "Inactive", all = "All", siwa = "Sign in with Apple"
     var id: String { rawValue }
 }
 
@@ -208,6 +212,11 @@ final class AppModel: ObservableObject {
     }
     @Published var selection: Set<Alias.ID> = []
     @Published var toast: String?
+    /// Sign in with Apple addresses (read-only) and the state of the Apple Account connection.
+    @Published var siwa: [Alias] = []
+    @Published var siwaState: SiwaState = .notConnected
+
+    enum SiwaState: Equatable { case notConnected, loading, code, ready, failed(String) }
 
     private var helper: Helper?
 
@@ -215,12 +224,12 @@ final class AppModel: ObservableObject {
     private var started = false
 
     var visible: [Alias] {
-        aliases
+        (filter == .siwa ? siwa : aliases)
             .filter {
                 switch filter {
                 case .active: return $0.isActive
                 case .inactive: return !$0.isActive
-                case .all: return true
+                case .all, .siwa: return true
                 }
             }
             .filter {
@@ -237,7 +246,12 @@ final class AppModel: ObservableObject {
     var selectedAliases: [Alias] { visible.filter { selection.contains($0.id) } }
 
     /// The selected address when exactly one is selected.
-    var selected: Alias? { selection.count == 1 ? aliases.first { selection.contains($0.id) } : nil }
+    var selected: Alias? {
+        selection.count == 1 ? (aliases + siwa).first { selection.contains($0.id) } : nil
+    }
+
+    /// Total in the current source, for "x of y addresses".
+    var sourceCount: Int { filter == .siwa ? siwa.count : aliases.count }
 
     func start() async {
         // The window, menu bar panel and hotkey panel all call this; connect once.
@@ -284,17 +298,62 @@ final class AppModel: ObservableObject {
     private func loggedIn() async throws {
         phase = .ready
         try await reloadThrowing()
+        Task { await self.loadSiwa(connect: false) }  // only if connected before; quiet on failure
+    }
+
+    // MARK: Sign in with Apple (read-only, from the Apple Account site)
+
+    func loadSiwa(connect: Bool) async {
+        guard let helper else { return }
+        if connect { siwaState = .loading }
+        do {
+            handleSiwa(try await helper.call("account_list", ["connect": connect]) as? [String: Any])
+        } catch {
+            siwaState = .failed(error.localizedDescription)
+        }
+    }
+
+    func verifySiwa(code: String) async {
+        guard let helper else { return }
+        siwaState = .loading
+        do {
+            handleSiwa(try await helper.call("account_verify", ["code": code]) as? [String: Any])
+        } catch {
+            siwaState = .code
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func disconnectSiwa() async {
+        _ = try? await helper?.call("account_disconnect")
+        siwa = []
+        siwaState = .notConnected
+    }
+
+    private func handleSiwa(_ result: [String: Any]?) {
+        switch result?["state"] as? String {
+        case "ok":
+            siwa = (result?["addresses"] as? [[String: Any]] ?? []).map(Alias.init)
+            siwaState = .ready
+        case "code": siwaState = .code
+        default: siwaState = .notConnected
+        }
     }
 
     func logout() async {
         await run {
             _ = try await self.helper!.call("logout")
             self.aliases = []
+            self.siwa = []
+            self.siwaState = .notConnected
             self.phase = .login
         }
     }
 
-    func reload() async { await run { try await self.reloadThrowing() } }
+    func reload() async {
+        await run { try await self.reloadThrowing() }
+        if siwaState == .ready { await loadSiwa(connect: false) }
+    }
 
     private func reloadThrowing() async throws {
         let list = try await helper!.call("list") as? [[String: Any]] ?? []
@@ -540,10 +599,17 @@ struct MainView: View {
             .onCopyCommand {
                 model.selectedAliases.isEmpty ? [] : [NSItemProvider(object: model.selectedAliases.map(\.address).joined(separator: "\n") as NSString)]
             }
-            .onDeleteCommand { pendingDelete = model.selectedAliases }
+            .onDeleteCommand {
+                let targets = model.selectedAliases.filter { !$0.isSiwa }
+                if !targets.isEmpty { pendingDelete = targets }
+            }
             .overlay {
-                if model.visible.isEmpty && !model.busy {
-                    ContentUnavailableView.search(text: model.search)
+                if model.visible.isEmpty && !model.busy && (model.filter != .siwa || model.siwaState == .ready) {
+                    if model.search.isEmpty && model.filter == .siwa {
+                        ContentUnavailableView("No Sign in with Apple addresses", systemImage: "apple.logo")
+                    } else {
+                        ContentUnavailableView.search(text: model.search)
+                    }
                 }
             }
             .navigationSplitViewColumnWidth(min: 300, ideal: 360)
@@ -574,8 +640,8 @@ struct MainView: View {
                 VStack(spacing: 0) {
                     Divider()
                     Text(model.selection.count > 1
-                         ? "\(model.selection.count) selected · \(model.visible.count) of \(model.aliases.count) addresses"
-                         : "\(model.visible.count) of \(model.aliases.count) addresses")
+                         ? "\(model.selection.count) selected · \(model.visible.count) of \(model.sourceCount) addresses"
+                         : "\(model.visible.count) of \(model.sourceCount) addresses")
                         .font(.caption).foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 6)
@@ -583,8 +649,12 @@ struct MainView: View {
                 .background(.bar)
             }
         } detail: {
-            if let alias = model.selected {
+            if let alias = model.selected, alias.isSiwa {
+                SiwaDetail(alias: alias).id(alias.id)
+            } else if let alias = model.selected {
                 AliasDetail(alias: alias).id(alias.id)
+            } else if model.filter == .siwa && model.siwaState != .ready {
+                SiwaConnectView()
             } else if model.selection.count > 1 {
                 BatchDetail(aliases: model.selectedAliases, onDelete: { pendingDelete = $0 })
             } else {
@@ -622,6 +692,9 @@ struct MainView: View {
                     Button("Export to CSV…") { model.exportCSV() }
                     Button("Check for Updates…") { Task { await Updater.shared.check(manual: true) } }
                     Toggle("Keep Running in Menu Bar When Closed", isOn: $keepInMenuBar)
+                    if model.siwaState == .ready {
+                        Button("Disconnect Apple Account") { Task { await model.disconnectSiwa() } }
+                    }
                     Divider()
                     Button("Sign Out \(model.appleId)") { Task { await model.logout() } }
                 } label: { Label("More", systemImage: "ellipsis.circle") }
@@ -647,10 +720,15 @@ struct MainView: View {
 
     /// Right-click acts on the whole selection when the clicked row is part of it.
     @ViewBuilder private func rowMenu(for alias: Alias) -> some View {
-        let targets = model.selection.contains(alias.id) ? model.selectedAliases : [alias]
-        Button(targets.count == 1 ? "Copy Address" : "Copy \(targets.count) Addresses") {
-            model.copy(targets.map(\.address).joined(separator: "\n"))
+        let all = model.selection.contains(alias.id) ? model.selectedAliases : [alias]
+        let targets = all.filter { !$0.isSiwa }  // Sign in with Apple addresses are read-only here
+        Button(all.count == 1 ? "Copy Address" : "Copy \(all.count) Addresses") {
+            model.copy(all.map(\.address).joined(separator: "\n"))
         }
+        if !targets.isEmpty { editMenu(targets) }
+    }
+
+    @ViewBuilder private func editMenu(_ targets: [Alias]) -> some View {
         Divider()
         if targets.contains(where: \.isActive) {
             Button("Deactivate") { Task { await model.setActive(targets, false) } }
@@ -675,9 +753,11 @@ struct BatchDetail: View {
             Text("\(active) active, \(aliases.count - active) inactive").foregroundStyle(.secondary)
             HStack {
                 Button("Copy All") { model.copy(aliases.map(\.address).joined(separator: "\n")) }
-                Button("Deactivate") { Task { await model.setActive(aliases, false) } }.disabled(active == 0)
-                Button("Reactivate") { Task { await model.setActive(aliases, true) } }.disabled(active == aliases.count)
-                Button("Delete…", role: .destructive) { onDelete(aliases) }
+                if !aliases.contains(where: \.isSiwa) {
+                    Button("Deactivate") { Task { await model.setActive(aliases, false) } }.disabled(active == 0)
+                    Button("Reactivate") { Task { await model.setActive(aliases, true) } }.disabled(active == aliases.count)
+                    Button("Delete…", role: .destructive) { onDelete(aliases) }
+                }
             }
             .disabled(model.busy)
             if model.busy { ProgressView().controlSize(.small) }
@@ -866,6 +946,109 @@ struct NewAliasSheet: View {
         address = nil
         address = await model.generate()
         if address == nil { dismiss() }
+    }
+}
+
+// MARK: - Sign in with Apple
+
+let appleAccountURL = URL(string: "https://account.apple.com/account/manage/section/security")!
+
+/// Shown in place of the details while the Apple Account isn't connected (yet).
+struct SiwaConnectView: View {
+    @EnvironmentObject var model: AppModel
+    @State private var code = ""
+
+    var body: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "apple.logo").font(.system(size: 38, weight: .light)).foregroundStyle(.secondary)
+            switch model.siwaState {
+            case .loading:
+                Text("Connecting to your Apple Account…").font(.title3.weight(.semibold))
+                ProgressView().controlSize(.small)
+            case .code:
+                Text("Enter verification code").font(.title3.weight(.semibold))
+                Text("Apple sent a 6-digit code to your iPhone, iPad or Mac to connect your Apple Account.")
+                    .foregroundStyle(.secondary).multilineTextAlignment(.center).frame(maxWidth: 360)
+                TextField("000000", text: $code)
+                    .font(.system(.title2, design: .monospaced))
+                    .multilineTextAlignment(.center)
+                    .frame(width: 160)
+                    .onSubmit(verify)
+                Button("Verify", action: verify).buttonStyle(.borderedProminent).disabled(code.count < 6)
+            case .failed(let message):
+                Text("Couldn't connect your Apple Account").font(.title3.weight(.semibold))
+                Text(message).foregroundStyle(.secondary).multilineTextAlignment(.center).frame(maxWidth: 380)
+                Button("Try Again") { Task { await model.loadSiwa(connect: true) } }.buttonStyle(.borderedProminent)
+            default:
+                Text("Show your Sign in with Apple addresses").font(.title3.weight(.semibold))
+                Text("Addresses made with Sign in with Apple are kept in your Apple Account, not in iCloud. "
+                     + "Connect your Apple Account to list them here. They're shown read-only; "
+                     + "manage them in your Apple Account settings.")
+                    .foregroundStyle(.secondary).multilineTextAlignment(.center).frame(maxWidth: 400)
+                Button("Connect Apple Account") { Task { await model.loadSiwa(connect: true) } }
+                    .buttonStyle(.borderedProminent)
+                Text("Apple may ask for a verification code the first time.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .padding(40)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func verify() {
+        guard code.count >= 6 else { return }
+        Task { await model.verifySiwa(code: code) }
+    }
+}
+
+/// Read-only details of a Sign in with Apple address.
+struct SiwaDetail: View {
+    @EnvironmentObject var model: AppModel
+    let alias: Alias
+
+    var body: some View {
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Text(alias.label.isEmpty ? "Sign in with Apple" : alias.label)
+                        .font(.title2.weight(.semibold)).lineLimit(1)
+                    StatusBadge(active: alias.isActive)
+                    Spacer()
+                }
+                HStack {
+                    Text(alias.address)
+                        .font(.system(.body, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                    Spacer()
+                    Button { model.copy(alias.address) } label: { Label("Copy Address", systemImage: "doc.on.doc") }
+                        .keyboardShortcut("c", modifiers: [.command, .shift])
+                }
+            }
+            .padding(.horizontal, 28).padding(.top, 22).padding(.bottom, 4)
+            Form {
+                Section("Details") {
+                    LabeledContent("App or website", value: alias.label.isEmpty ? "—" : alias.label)
+                    LabeledContent("Forwards to", value: alias.forwardTo.isEmpty ? "—" : alias.forwardTo)
+                    LabeledContent("Created",
+                                   value: alias.created?.formatted(date: .long, time: .omitted) ?? "—")
+                    LabeledContent("Created with", value: "Sign in with Apple")
+                }
+                Section {
+                    Text("This address was made when you used Sign in with Apple with “Hide My Email”. "
+                         + "Apple manages it in your Apple Account: there you can stop forwarding mail "
+                         + "or stop using Sign in with Apple for this app or website.")
+                        .foregroundStyle(.secondary)
+                    HStack {
+                        Spacer()
+                        Link("Open Apple Account Settings", destination: appleAccountURL)
+                    }
+                } header: {
+                    Text("Managed by Apple")
+                }
+            }
+            .formStyle(.grouped)
+        }
     }
 }
 
@@ -1214,6 +1397,14 @@ extension AppModel {
             ["hme": "lunar-pebble04@icloud.com", "label": "Old newsletter", "note": "", "isActive": false,
              "createTimestamp": now - 3e10, "anonymousId": "c", "forwardToEmail": "me@example.com"],
         ].map(Alias.init)
+        siwa = [
+            ["hme": "x7k2pq9d4m@privaterelay.appleid.com", "label": "Spotify", "isActive": true, "siwa": true,
+             "createTimestamp": now - 2e10, "anonymousId": "siwa:1", "forwardToEmail": "me@example.com",
+             "origin": "SIGN_IN_WITH_APPLE"],
+            ["hme": "b3n8wz5q1r@privaterelay.appleid.com", "label": "Airbnb", "isActive": true, "siwa": true,
+             "createTimestamp": now - 5e10, "anonymousId": "siwa:2", "forwardToEmail": "me@example.com",
+             "origin": "SIGN_IN_WITH_APPLE"],
+        ].map(Alias.init)
         phase = .ready
         filter = .all
     }
@@ -1230,6 +1421,7 @@ enum SnapshotMain {
         let model = AppModel.shared
         model.loadSample()
         var keep: [NSWindow] = []
+        var keepSiwa: [Alias] = []
         let shots: [(String, NSSize, Set<String>, AnyView)] = [
             ("main", NSSize(width: 1040, height: 680), ["a"], AnyView(MainView())),
             ("inactive", NSSize(width: 1040, height: 680), ["c"], AnyView(MainView())),
@@ -1237,10 +1429,15 @@ enum SnapshotMain {
             ("empty", NSSize(width: 1040, height: 680), [], AnyView(MainView())),
             ("login", NSSize(width: 760, height: 520), [], AnyView(LoginView())),
             ("quick", NSSize(width: 340, height: 170), [], AnyView(QuickCreateView())),
+            ("siwa-connect", NSSize(width: 680, height: 520), [], AnyView(SiwaConnectView())),
+            ("siwa-detail", NSSize(width: 1040, height: 680), ["siwa:1"], AnyView(MainView())),
         ]
         for (i, shot) in shots.enumerated() {
             DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 1.5) {
                 model.selection = shot.2
+                model.filter = shot.0.hasPrefix("siwa") ? .siwa : .all
+                model.siwaState = shot.0 == "siwa-connect" ? .notConnected : .ready
+                if shot.0 == "siwa-connect" { keepSiwa = model.siwa; model.siwa = [] } else if !keepSiwa.isEmpty { model.siwa = keepSiwa }
                 let window = NSWindow(contentRect: NSRect(origin: NSPoint(x: -30000, y: -30000), size: shot.1),
                                       styleMask: [.titled, .closable, .miniaturizable, .resizable],
                                       backing: .buffered, defer: false)

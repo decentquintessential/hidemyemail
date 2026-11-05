@@ -59,6 +59,8 @@ ACCENT = "#3a6ff0"
 RELEASES_API = "https://api.github.com/repos/decentquintessential/hidemyemail/releases/latest"
 SETUP_ASSET = "HideMyEmail-Setup.exe"
 UPDATE_CHECK_HOURS = 6
+SIWA = "Sign in with Apple"
+APPLE_ACCOUNT_URL = "https://account.apple.com/account/manage/section/security"
 
 
 # ---------------------------------------------------------------- updates
@@ -190,7 +192,8 @@ def sort_aliases(aliases: list[dict], order: str) -> list[dict]:
 def origin_text(a: dict) -> str:
     """Where the address was made: "Safari — example.com", "Created by hand", or an app name."""
     kind, domain, app = a.get("origin") or "", a.get("domain") or "", a.get("originAppName") or ""
-    source = {"SAFARI": "Safari", "ON_DEMAND": "Created by hand", "": ""}.get(kind, app or kind.capitalize())
+    source = {"SAFARI": "Safari", "ON_DEMAND": "Created by hand", "SIGN_IN_WITH_APPLE": "Sign in with Apple",
+              "": ""}.get(kind, app or kind.capitalize())
     if domain:
         source = f"{source} — {domain}" if source else domain
     return source
@@ -570,6 +573,8 @@ class MainWindow(QMainWindow):
         self.statusBar().setSizeGripEnabled(False)
         self.statusBar().addPermanentWidget(QLabel(f"Version {APP_VERSION}"))
         self.update_ready: tuple[dict, Path] | None = None
+        self.siwa: list[dict] = []  # Sign in with Apple addresses (read-only)
+        self.siwa_state = "not_connected"  # not_connected, loading, code, ready, failed
         self._quitting = False
         self.starting_page = centered(icon_label(48), 6, muted("Connecting to iCloud…"))
         self.login_page = self._build_login()
@@ -825,6 +830,8 @@ class MainWindow(QMainWindow):
 
         def ok(_):
             self.aliases = []
+            self.siwa = []
+            self.siwa_state = "not_connected"
             self.toolbar.setVisible(False)
             self.stack.setCurrentWidget(self.login_page)
 
@@ -861,6 +868,8 @@ class MainWindow(QMainWindow):
         options.addSeparator()
         options.addAction(self.keep_running_action)
         options.addSeparator()
+        self.disconnect_action = options.addAction("Disconnect Apple Account", self.disconnect_siwa)
+        self.disconnect_action.setVisible(False)
         options.addAction("Sign out", self.sign_out)
         options_button = QToolButton(text="Options  ▾", popupMode=QToolButton.InstantPopup)
         options_button.setMenu(options)
@@ -870,7 +879,7 @@ class MainWindow(QMainWindow):
         self.search = QLineEdit(placeholderText="Search addresses, labels, notes, websites", clearButtonEnabled=True)
         self.search_action = self.search.addAction(search_icon(), QLineEdit.LeadingPosition)
         self.search.textChanged.connect(self.refresh_list)
-        self.filter = Segmented(["Active", "Inactive", "All"])
+        self.filter = Segmented(["Active", "Inactive", "All", SIWA])
         self.filter.changed.connect(self.refresh_list)
         self.sort = QComboBox(toolTip="Sort addresses")
         self.sort.addItems(SORT_ORDERS)
@@ -887,7 +896,7 @@ class MainWindow(QMainWindow):
         self.list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.list.customContextMenuRequested.connect(self.list_menu)
         QShortcut(QKeySequence.Copy, self.list, self.copy_selected, context=Qt.WidgetShortcut)
-        QShortcut(QKeySequence.Delete, self.list, lambda: self.ask_delete(self.selected()),
+        QShortcut(QKeySequence.Delete, self.list, lambda: self.ask_delete(self.editable(self.selected())),
                   context=Qt.WidgetShortcut)
         self.count = QLabel()
         self.count.setProperty("role", "muted")
@@ -913,7 +922,9 @@ class MainWindow(QMainWindow):
                   "Ctrl-click or Shift-click to select several."), width=380)
         self.detail = self._build_detail()
         self.batch = self._build_batch()
-        for page in (self.empty_detail, self.detail, self.batch):
+        self.siwa_detail = self._build_siwa_detail()
+        self.siwa_connect = self._build_siwa_connect()
+        for page in (self.empty_detail, self.detail, self.batch, self.siwa_detail, self.siwa_connect):
             self.detail_stack.addWidget(page)
 
         splitter = QSplitter(objectName="page")
@@ -1019,6 +1030,7 @@ class MainWindow(QMainWindow):
         self.save.setEnabled(dirty and a.get("isActive", True))
 
     def _build_batch(self) -> QWidget:
+        self.batch_edit_buttons: list[QPushButton] = []
         self.b_title = heading("", "title")
         self.b_counts = muted("")
         buttons = QHBoxLayout()
@@ -1034,6 +1046,8 @@ class MainWindow(QMainWindow):
                 styled(button, kind)
             button.clicked.connect(slot)
             buttons.addWidget(button)
+            if text != "Copy all":
+                self.batch_edit_buttons.append(button)
         buttons.addStretch()
         box, layout = card(10)
         layout.setContentsMargins(28, 26, 28, 26)
@@ -1043,10 +1057,189 @@ class MainWindow(QMainWindow):
         layout.addLayout(buttons)
         return centered(box, width=500)
 
+    def _build_siwa_detail(self) -> QWidget:
+        self.s_title = heading("", "title", Qt.AlignLeft)
+        self.s_status = QLabel()
+        self.s_address = QLabel()
+        self.s_address.setFont(theme.mono_font(10.5))
+        self.s_address.setProperty("role", "address")
+        self.s_address.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        copy = QPushButton("Copy address")
+        copy.clicked.connect(lambda: self.copy(self.current()["hme"]))
+        title_row = QHBoxLayout()
+        title_row.setSpacing(10)
+        title_row.addWidget(self.s_title)
+        title_row.addWidget(self.s_status, 0, Qt.AlignVCenter)
+        title_row.addStretch()
+        address_row = QHBoxLayout()
+        address_row.addWidget(self.s_address, 1)
+        address_row.addWidget(copy)
+
+        info, info_layout = card()
+        info_layout.addWidget(section("Details"))
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(24)
+        grid.setVerticalSpacing(10)
+        self.s_app, self.s_forward, self.s_created = QLabel(), QLabel(), QLabel()
+        for row, (key, value) in enumerate((("App or website", self.s_app), ("Forwards to", self.s_forward),
+                                            ("Created", self.s_created), ("Created with", QLabel(SIWA)))):
+            k = QLabel(key)
+            k.setProperty("role", "key")
+            value.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            grid.addWidget(k, row, 0, Qt.AlignTop)
+            grid.addWidget(value, row, 1)
+        grid.setColumnStretch(1, 1)
+        info_layout.addLayout(grid)
+
+        managed, managed_layout = card(8)
+        managed_layout.addWidget(section("Managed by Apple"))
+        managed_layout.addWidget(muted(
+            "This address was made when you used Sign in with Apple with “Hide My Email”. Apple manages it "
+            "in your Apple Account: there you can stop forwarding mail or stop using Sign in with Apple for "
+            "this app or website.", Qt.AlignLeft))
+        open_settings = styled(QPushButton("Open Apple Account settings"), "ghost")
+        open_settings.clicked.connect(lambda: __import__("webbrowser").open(APPLE_ACCOUNT_URL))
+        row = QHBoxLayout()
+        row.addStretch()
+        row.addWidget(open_settings)
+        managed_layout.addLayout(row)
+
+        content = QWidget(objectName="page")
+        v = QVBoxLayout(content)
+        v.setContentsMargins(16, 18, 20, 18)
+        v.setSpacing(14)
+        v.addLayout(title_row)
+        v.addLayout(address_row)
+        v.addSpacing(4)
+        v.addWidget(info)
+        v.addWidget(managed)
+        v.addStretch()
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setWidget(content)
+        return scroll
+
+    def _build_siwa_connect(self) -> QWidget:
+        self.sc_title = heading("", "heading")
+        self.sc_text = muted("")
+        self.sc_code = QLineEdit(placeholderText="000000", maxLength=6, alignment=Qt.AlignCenter)
+        self.sc_code.setFont(theme.mono_font(16))
+        self.sc_code.setFixedWidth(170)
+        self.sc_code.returnPressed.connect(self.verify_siwa)
+        self.sc_button = styled(QPushButton(), "primary")
+        self.sc_button.clicked.connect(self._siwa_button)
+        self.sc_hint = muted("Apple may ask for a verification code the first time.")
+        code_row = QHBoxLayout()
+        code_row.addStretch()
+        code_row.addWidget(self.sc_code)
+        code_row.addStretch()
+        button_row = QHBoxLayout()
+        button_row.addStretch()
+        button_row.addWidget(self.sc_button)
+        button_row.addStretch()
+        box, layout = card(10)
+        layout.setContentsMargins(28, 26, 28, 26)
+        layout.addWidget(self.sc_title)
+        layout.addWidget(self.sc_text)
+        layout.addSpacing(6)
+        layout.addLayout(code_row)
+        layout.addLayout(button_row)
+        layout.addWidget(self.sc_hint)
+        return centered(box, width=480)
+
+    def _update_siwa_connect(self):
+        state = self.siwa_state
+        self.sc_code.setVisible(state == "code")
+        self.sc_hint.setVisible(state == "not_connected")
+        self.sc_button.setVisible(state != "loading")
+        if state == "loading":
+            self.sc_title.setText("Connecting to your Apple Account…")
+            self.sc_text.setText("This can take a few seconds.")
+        elif state == "code":
+            self.sc_title.setText("Enter verification code")
+            self.sc_text.setText("Apple sent a 6-digit code to your iPhone, iPad or Mac to connect your Apple Account.")
+            self.sc_button.setText("Verify")
+            self.sc_code.setFocus()
+        elif state.startswith("failed"):
+            self.sc_title.setText("Couldn't connect your Apple Account")
+            self.sc_text.setText(state.partition(":")[2] or "Something went wrong.")
+            self.sc_button.setText("Try again")
+        else:
+            self.sc_title.setText("Show your Sign in with Apple addresses")
+            self.sc_text.setText("Addresses made with Sign in with Apple are kept in your Apple Account, not in "
+                                 "iCloud. Connect your Apple Account to list them here. They're shown read-only; "
+                                 "manage them in your Apple Account settings.")
+            self.sc_button.setText("Connect Apple Account")
+
+    def _siwa_button(self):
+        if self.siwa_state == "code":
+            self.verify_siwa()
+        else:
+            self.load_siwa(connect=True)
+
+    # ------------------------------------------------------------ Sign in with Apple (read-only)
+
+    def load_siwa(self, connect: bool):
+        """Read Sign in with Apple addresses; signs in to the Apple Account only when asked or
+        when it was connected before. Automatic loads stay quiet when something fails."""
+        if connect:
+            self._set_siwa_state("loading")
+        self._siwa_job(lambda: self.backend.cmd_account_list({"connect": connect}), quiet=not connect)
+
+    def verify_siwa(self):
+        code = self.sc_code.text().strip()
+        if len(code) < 6:
+            return
+        self._set_siwa_state("loading")
+        self._siwa_job(lambda: self.backend.cmd_account_verify({"code": code}), quiet=False, retry_state="code")
+
+    def disconnect_siwa(self):
+        self.backend.cmd_account_disconnect({})
+        self.siwa = []
+        self._set_siwa_state("not_connected")
+
+    def _siwa_job(self, fn, quiet: bool, retry_state: str | None = None):
+        job = _Job(fn)
+        self.jobs.add(job)
+
+        def done(result):
+            self.jobs.discard(job)
+            state = result.get("state")
+            if state == "ok":
+                self.siwa = result.get("addresses", [])
+                self._set_siwa_state("ready")
+            else:
+                self._set_siwa_state("code" if state == "code" else "not_connected")
+
+        def failed(message):
+            self.jobs.discard(job)
+            if retry_state:
+                self._set_siwa_state(retry_state)
+                QMessageBox.warning(self, "Couldn't connect", message)
+            elif not quiet:
+                self._set_siwa_state(f"failed:{message}")
+
+        job.signals.done.connect(done)
+        job.signals.failed.connect(failed)
+        self.pool.start(job)
+
+    def _set_siwa_state(self, state: str):
+        self.siwa_state = state
+        self.disconnect_action.setVisible(state == "ready")
+        self._update_siwa_connect()
+        self.refresh_list()
+
+    @staticmethod
+    def editable(aliases: list[dict]) -> list[dict]:
+        """Addresses this app may change (Sign in with Apple ones are read-only)."""
+        return [a for a in aliases if not a.get("siwa")]
+
     def show_main(self):
         self.toolbar.setVisible(True)
         self.stack.setCurrentWidget(self.main_page)
         self.reload()
+        QTimer.singleShot(500, lambda: self.load_siwa(connect=False))
 
     def reload(self, select: str | None = None):
         def ok(aliases):
@@ -1066,9 +1259,10 @@ class MainWindow(QMainWindow):
     def visible(self) -> list[dict]:
         mode = self.filter.currentText()
         q = self.search.text().lower()
+        source = self.siwa if mode == SIWA else self.aliases
         shown = [
-            a for a in self.aliases
-            if (mode == "All" or a.get("isActive", True) == (mode == "Active"))
+            a for a in source
+            if (mode in ("All", SIWA) or a.get("isActive", True) == (mode == "Active"))
             and (not q or any(q in (a.get(k) or "").lower() for k in ("hme", "label", "note"))
                  or q in origin_text(a).lower())
         ]
@@ -1102,17 +1296,38 @@ class MainWindow(QMainWindow):
     def show_detail(self, *_):
         chosen = self.selected()
         shown = self.list.count()
-        self.count.setText(f"{len(chosen)} selected  ·  {shown} of {plural(len(self.aliases))}"
-                           if len(chosen) > 1 else f"{shown} of {plural(len(self.aliases))}")
+        total = len(self.siwa if self.filter.currentText() == SIWA else self.aliases)
+        self.count.setText(f"{len(chosen)} selected  ·  {shown} of {plural(total)}"
+                           if len(chosen) > 1 else f"{shown} of {plural(total)}")
         if len(chosen) > 1:
             active = sum(a.get("isActive", True) for a in chosen)
             self.b_title.setText(f"{len(chosen)} addresses selected")
             self.b_counts.setText(f"{active} active, {len(chosen) - active} inactive")
+            read_only = len(self.editable(chosen)) < len(chosen)
+            for button in self.batch_edit_buttons:
+                button.setVisible(not read_only)
             self.detail_stack.setCurrentWidget(self.batch)
             return
         a = self.current()
         if not a:
-            self.detail_stack.setCurrentWidget(self.empty_detail)
+            if self.filter.currentText() == SIWA and self.siwa_state != "ready":
+                self._update_siwa_connect()
+                self.detail_stack.setCurrentWidget(self.siwa_connect)
+            else:
+                self.detail_stack.setCurrentWidget(self.empty_detail)
+            return
+        if a.get("siwa"):
+            active = a.get("isActive", True)
+            self.s_title.setText(a.get("label") or SIWA)
+            self.s_status.setText("Active" if active else "Inactive")
+            self.s_status.setProperty("role", "pill-active" if active else "pill-inactive")
+            self.s_status.style().unpolish(self.s_status)
+            self.s_status.style().polish(self.s_status)
+            self.s_address.setText(a.get("hme", ""))
+            self.s_app.setText(a.get("label") or "—")
+            self.s_forward.setText(a.get("forwardToEmail") or "—")
+            self.s_created.setText(fmt_date(a.get("createTimestamp")) or "—")
+            self.detail_stack.setCurrentWidget(self.siwa_detail)
             return
         self.detail_stack.setCurrentWidget(self.detail)
         active = a.get("isActive", True)
@@ -1170,10 +1385,14 @@ class MainWindow(QMainWindow):
         if not item:
             return
         # Right-click acts on the whole selection when the clicked row is part of it.
-        targets = self.selected() if item.isSelected() else [item.data(Qt.UserRole)]
+        everything = self.selected() if item.isSelected() else [item.data(Qt.UserRole)]
+        targets = self.editable(everything)
         menu = QMenu(self)
-        menu.addAction("Copy address" if len(targets) == 1 else f"Copy {plural(len(targets))}",
-                       lambda: self.copy("\n".join(a["hme"] for a in targets)))
+        menu.addAction("Copy address" if len(everything) == 1 else f"Copy {plural(len(everything))}",
+                       lambda: self.copy("\n".join(a["hme"] for a in everything)))
+        if not targets:
+            menu.exec(self.list.viewport().mapToGlobal(pos))
+            return
         menu.addSeparator()
         if any(a.get("isActive", True) for a in targets):
             menu.addAction("Deactivate", lambda: self.set_active(targets, False))
@@ -1259,6 +1478,16 @@ SAMPLE = [
 ]
 
 
+SAMPLE_SIWA = [
+    {"hme": "x7k2pq9d4m@privaterelay.appleid.com", "label": "Spotify", "isActive": True, "siwa": True,
+     "createTimestamp": 1730000000000, "anonymousId": "siwa:1", "forwardToEmail": "me@example.com",
+     "origin": "SIGN_IN_WITH_APPLE"},
+    {"hme": "b3n8wz5q1r@privaterelay.appleid.com", "label": "Airbnb", "isActive": False, "siwa": True,
+     "createTimestamp": 1700000000000, "anonymousId": "siwa:2", "forwardToEmail": "me@example.com",
+     "origin": "SIGN_IN_WITH_APPLE"},
+]
+
+
 def selftest(out_dir: str) -> int:
     """Check that everything the build needs is importable, then render the UI.
 
@@ -1307,6 +1536,23 @@ def selftest(out_dir: str) -> int:
     win.copy_selected()
     assert QGuiApplication.clipboard().text().count("\n") == 2
     win.grab().save(str(out / "batch.png"))
+
+    # Sign in with Apple view: connect screen when not connected, read-only details when ready.
+    win.list.clearSelection()
+    win.filter.setCurrentText(SIWA)
+    app.processEvents()
+    assert win.detail_stack.currentWidget() is win.siwa_connect
+    win.grab().save(str(out / "siwa-connect.png"))
+    win.siwa = SAMPLE_SIWA
+    win._set_siwa_state("ready")
+    win.list.setCurrentRow(0)
+    app.processEvents()
+    assert win.detail_stack.currentWidget() is win.siwa_detail and win.s_title.text() == "Airbnb" or win.s_title.text() == "Spotify"
+    assert win.editable(win.selected()) == []
+    win.grab().save(str(out / "siwa.png"))
+    report.write("sign in with apple view ok\n")
+    win.filter.setCurrentText("All")
+    app.processEvents()
 
     win.quick.popup()
     app.processEvents()

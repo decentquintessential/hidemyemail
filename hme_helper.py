@@ -22,6 +22,8 @@ from pathlib import Path
 from typing import Any
 
 from pyicloud import PyiCloudService
+
+from apple_account import AccountError, AppleAccount, CodeRequired, normalise
 from pyicloud.exceptions import PyiCloudFailedLoginException
 from pyicloud.utils import (
     delete_password_in_keyring,
@@ -73,6 +75,7 @@ class Backend:
         self.api: PyiCloudService | None = None
         self.apple_id: str | None = None
         self.password: str | None = None
+        self._account: AppleAccount | None = None
 
     # ------------------------------------------------------------ auth
 
@@ -139,6 +142,58 @@ class Backend:
         shutil.rmtree(SESSION_DIR, ignore_errors=True)
         CONFIG_FILE.unlink(missing_ok=True)
         self.api = None
+        self._account = None
+        return {}
+
+    # ------------------------------------------------------------ Sign in with Apple (read-only)
+
+    def _apple_account(self) -> AppleAccount:
+        if self._account is None:
+            self._account = AppleAccount(SESSION_DIR / "apple-account.bin")
+        return self._account
+
+    def _account_result(self, data) -> dict[str, Any]:
+        known = {a.get("hme", "").lower() for a in self.cmd_list({})}
+        return {"state": "ok", "addresses": normalise(data, known)}
+
+    def cmd_account_list(self, req) -> dict[str, Any]:
+        """Sign in with Apple addresses from the Apple Account site.
+
+        Signs in to the Apple Account site only when asked ("connect": true) or when it
+        was connected before; otherwise reports "not_connected". May answer "code" when
+        Apple wants a 2FA code first (it's sent to the trusted devices).
+        """
+        self._require_api()
+        account = self._apple_account()
+        connected_before = account.state_file.exists()
+        if not connected_before and not req.get("connect"):
+            return {"state": "not_connected"}
+        try:
+            data = account.private_emails() if connected_before else None
+            if data is None:
+                account.sign_in(self.apple_id, self.password)
+                data = account.private_emails()
+                if data is None:
+                    raise AccountError("Apple opened the session but didn't return the list.")
+        except CodeRequired:
+            return {"state": "code"}
+        except AccountError as exc:
+            raise HelperError(str(exc)) from exc
+        return self._account_result(data)
+
+    def cmd_account_verify(self, req) -> dict[str, Any]:
+        account = self._apple_account()
+        try:
+            account.verify_code(str(req.get("code", "")))
+            data = account.private_emails()
+            if data is None:
+                raise AccountError("Apple accepted the code but didn't return the list.")
+        except AccountError as exc:
+            raise HelperError(str(exc)) from exc
+        return self._account_result(data)
+
+    def cmd_account_disconnect(self, req) -> dict[str, Any]:
+        self._apple_account().forget()
         return {}
 
     def _require_api(self, allow_pending: bool = False) -> PyiCloudService:
