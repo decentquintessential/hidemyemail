@@ -59,13 +59,13 @@ The first time you open the app, sign in with your **Apple ID and password**, th
 
 Your password is stored securely by your computer: in **Windows Credential Manager** on Windows, or the **Keychain** on a Mac. If your Mac asks whether **hme-helper** may use your Keychain, type the password you use to **log in to your Mac** (not your Apple ID password) and click **Always Allow**. hme-helper is the part of the app that talks to iCloud. After the first time, the app signs in on its own. Apple asks for a new code from time to time.
 
-To sign out and remove the saved password, click **Sign out** in the toolbar on Windows, or **⋯ → Sign Out** on a Mac.
+To sign out and remove the saved password, choose **Options → Sign out** on Windows, or **⋯ → Sign Out** on a Mac.
 
 ## Using the app
 
 ### Create an address
 
-Click **New address** on Windows or **+** on a Mac (or press Ctrl+N or ⌘N). Type what it's for, for example "Netflix", and click **Create & Copy**. If you don't like the generated address, ask for another one first: click **Another one** on Windows, or the circular arrows on a Mac. The new address is copied to your clipboard, ready to paste into a sign-up form.
+Click **+ New address** on Windows or **+** on a Mac (or press Ctrl+N or ⌘N). Type what it's for, for example "Netflix", and click **Create & Copy**. If you don't like the generated address, ask for another one first: click **Another one** on Windows, or the circular arrows on a Mac. The new address is copied to your clipboard, ready to paste into a sign-up form.
 
 ### Quick-create from anywhere
 
@@ -83,7 +83,7 @@ If you want the shortcut to work all the time, switch on **Options → Keep runn
 ### Find, sort and filter
 
 - Type in the search box to search addresses, labels, notes and websites.
-- Choose whether to show **Active**, **Inactive** or **All** addresses: with the menu under the search box on Windows, or the buttons at the top of the window on a Mac.
+- Choose whether to show **Active**, **Inactive** or **All** addresses: with the buttons under the search box on Windows, or at the top of the window on a Mac.
 - **Sort** (above the list) orders the list by **Newest first**, **Oldest first**, **Name A–Z** or **Name Z–A**. "Name" is the label, and addresses without a label go at the bottom. The app remembers your choice.
 
 ### Edit, deactivate or delete
@@ -113,11 +113,11 @@ Ctrl-click or Shift-click to select several addresses (⌘-click or ⇧-click on
 
 ### Export
 
-Click **Export CSV…** on Windows, or **⋯ → Export to CSV…** on a Mac, to save all your addresses, with their labels, notes, status and creation dates, as a spreadsheet file.
+Choose **Options → Export CSV…** on Windows, or **⋯ → Export to CSV…** on a Mac, to save all your addresses, with their labels, notes, status and creation dates, as a spreadsheet file.
 
 ## Updates
 
-The app checks for a new version shortly after it starts and every few hours. You can also check yourself: click **Check for updates** in the toolbar or tray menu on Windows, or choose **Hide My Email → Check for Updates…** (or **⋯ → Check for Updates…**) on a Mac. When a new version is available, the app downloads it in the background and shows a bar at the top of the window:
+The app checks for a new version shortly after it starts and every few hours. You can also check yourself: choose **Options → Check for updates** (or **Check for updates** in the tray menu) on Windows, or choose **Hide My Email → Check for Updates…** (or **⋯ → Check for Updates…**) on a Mac. When a new version is available, the app downloads it in the background and shows a bar at the top of the window:
 
 ![Update bar](docs/windows-update.png)
 

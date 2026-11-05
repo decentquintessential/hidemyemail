@@ -40,12 +40,14 @@ from PySide6.QtGui import (
     QAction, QColor, QFont, QGuiApplication, QIcon, QKeySequence, QPainter, QPixmap, QShortcut,
 )
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QComboBox, QDialog, QFileDialog, QFormLayout, QHBoxLayout,
-    QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox,
-    QPlainTextEdit, QPushButton, QSplitter, QStackedWidget, QSystemTrayIcon, QToolBar, QToolButton,
-    QVBoxLayout, QWidget,
+    QAbstractItemView, QApplication, QButtonGroup, QComboBox, QDialog, QFileDialog, QFrame, QGridLayout,
+    QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox,
+    QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy, QSplitter, QStackedWidget, QSystemTrayIcon,
+    QToolBar, QToolButton, QVBoxLayout, QWidget,
 )
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import theme  # noqa: E402
 from hme_helper import Backend
 
 try:
@@ -195,7 +197,7 @@ def origin_text(a: dict) -> str:
 
 
 def is_dark_mode() -> bool:
-    return QGuiApplication.styleHints().colorScheme() == Qt.ColorScheme.Dark
+    return theme.is_dark()
 
 
 def plural(n: int, word: str = "address") -> str:
@@ -222,16 +224,40 @@ def dot_icon(color: str) -> QIcon:
 
 
 def app_icon() -> QIcon:
+    """Blue rounded tile with a white "@"; also the source of the .exe icon."""
+    from PySide6.QtGui import QLinearGradient
+
     pm = QPixmap(256, 256)
     pm.fill(Qt.transparent)
     p = QPainter(pm)
     p.setRenderHint(QPainter.Antialiasing)
-    p.setBrush(QColor(ACCENT))
+    gradient = QLinearGradient(0, 16, 0, 240)
+    gradient.setColorAt(0, QColor("#4c86f7"))
+    gradient.setColorAt(1, QColor("#1f55d6"))
+    p.setBrush(gradient)
     p.setPen(Qt.NoPen)
-    p.drawRoundedRect(16, 16, 224, 224, 50, 50)
+    p.drawRoundedRect(16, 16, 224, 224, 54, 54)
     p.setPen(QColor("white"))
-    p.setFont(QFont("Segoe UI", 110, QFont.Bold))
-    p.drawText(pm.rect(), Qt.AlignCenter, "@")
+    font = theme.ui_font(96, QFont.DemiBold)
+    font.setPixelSize(132)
+    p.setFont(font)
+    p.drawText(pm.rect().adjusted(0, -8, 0, 0), Qt.AlignCenter, "@")
+    p.end()
+    return QIcon(pm)
+
+
+def search_icon() -> QIcon:
+    pm = QPixmap(32, 32)
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing)
+    pen = p.pen()
+    pen.setColor(QColor(theme.t("subtle")))
+    pen.setWidthF(2.6)
+    pen.setCapStyle(Qt.RoundCap)
+    p.setPen(pen)
+    p.drawEllipse(7, 7, 13, 13)
+    p.drawLine(18, 18, 25, 25)
     p.end()
     return QIcon(pm)
 
@@ -239,16 +265,21 @@ def app_icon() -> QIcon:
 # ---------------------------------------------------------------- pages
 
 
-def centered(*widgets, width=340) -> QWidget:
-    page = QWidget()
+def centered(*widgets, width=360) -> QWidget:
+    """A page with the widgets in a column of fixed width, centred."""
+    page = QWidget(objectName="page")
     outer = QVBoxLayout(page)
     outer.addStretch()
     box = QWidget()
     box.setFixedWidth(width)
     inner = QVBoxLayout(box)
-    inner.setSpacing(12)
+    inner.setContentsMargins(0, 0, 0, 0)
+    inner.setSpacing(10)
     for w in widgets:
-        inner.addWidget(w)
+        if isinstance(w, int):
+            inner.addSpacing(w)
+        else:
+            inner.addWidget(w)
     row = QHBoxLayout()
     row.addStretch()
     row.addWidget(box)
@@ -258,22 +289,76 @@ def centered(*widgets, width=340) -> QWidget:
     return page
 
 
-def heading(text: str, size=18) -> QLabel:
+def heading(text: str, role: str = "title", align=Qt.AlignCenter) -> QLabel:
     label = QLabel(text)
-    f = label.font()
-    f.setPointSize(size)
-    f.setBold(True)
-    label.setFont(f)
-    label.setAlignment(Qt.AlignCenter)
+    label.setProperty("role", role)
+    label.setAlignment(align)
+    label.setWordWrap(True)
     return label
 
 
-def muted(text: str) -> QLabel:
+def muted(text: str, align=Qt.AlignCenter) -> QLabel:
     label = QLabel(text)
     label.setWordWrap(True)
-    label.setAlignment(Qt.AlignCenter)
-    label.setStyleSheet("color: palette(placeholder-text);")
+    label.setAlignment(align)
+    label.setProperty("role", "muted")
     return label
+
+
+def styled(widget, kind: str):
+    """Mark a button as "primary", "danger" or "ghost" for the style sheet."""
+    widget.setProperty("kind", kind)
+    return widget
+
+
+def card(spacing: int = 12) -> tuple[QFrame, QVBoxLayout]:
+    frame = QFrame(objectName="card")
+    layout = QVBoxLayout(frame)
+    layout.setContentsMargins(20, 18, 20, 18)
+    layout.setSpacing(spacing)
+    return frame, layout
+
+
+def section(text: str) -> QLabel:
+    label = QLabel(text.upper())
+    label.setProperty("role", "section")
+    return label
+
+
+def icon_label(size: int = 56) -> QLabel:
+    label = QLabel()
+    label.setPixmap(app_icon().pixmap(size, size))
+    label.setAlignment(Qt.AlignCenter)
+    return label
+
+
+class Segmented(QWidget):
+    """Segmented control (Active | Inactive | All) with a QComboBox-like API."""
+
+    changed = Signal(str)
+
+    def __init__(self, options: list[str]):
+        super().__init__(objectName="segmented")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(2, 2, 2, 2)
+        row.setSpacing(2)
+        self.group = QButtonGroup(self, exclusive=True)
+        for text in options:
+            b = QPushButton(text, checkable=True)
+            b.setCursor(Qt.PointingHandCursor)
+            self.group.addButton(b)
+            row.addWidget(b)
+        self.group.buttons()[0].setChecked(True)
+        self.group.buttonToggled.connect(lambda b, on: on and self.changed.emit(b.text()))
+
+    def currentText(self) -> str:
+        return self.group.checkedButton().text()
+
+    def setCurrentText(self, text: str):
+        for b in self.group.buttons():
+            if b.text() == text:
+                b.setChecked(True)
 
 
 class NewAliasDialog(QDialog):
@@ -282,33 +367,45 @@ class NewAliasDialog(QDialog):
         self.win = win
         self.address: str | None = None
         self.setWindowTitle("New address")
-        self.setMinimumWidth(440)
+        self.setMinimumWidth(460)
 
+        title = heading("New Hide My Email address", "heading", Qt.AlignLeft)
+        intro = muted("A random address that forwards to your inbox. Give it a label so you "
+                      "remember where you used it.", Qt.AlignLeft)
         self.address_label = QLabel("Generating…")
-        self.address_label.setStyleSheet("font-family: Consolas, Menlo, monospace; font-size: 14px;")
+        self.address_label.setFont(theme.mono_font(11))
         self.address_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        again = QPushButton("Another one")
+        again = styled(QPushButton("Another one"), "ghost")
         again.clicked.connect(self.regenerate)
-        self.label = QLineEdit(placeholderText="Label, e.g. Netflix")
+        address_box, address_row = card(0)
+        address_box.layout().setContentsMargins(14, 10, 8, 10)
+        row = QHBoxLayout()
+        row.addWidget(self.address_label, 1)
+        row.addWidget(again)
+        address_row.addLayout(row)
+        self.label = QLineEdit(placeholderText="Label, for example Netflix")
         self.note = QLineEdit(placeholderText="Note (optional)")
-        self.create = QPushButton("Create && Copy")
+        self.create = styled(QPushButton("Create && Copy"), "primary")
         self.create.setDefault(True)
         self.create.clicked.connect(self.submit)
         cancel = QPushButton("Cancel")
         cancel.clicked.connect(self.reject)
         self.label.textChanged.connect(self._update)
 
-        top = QHBoxLayout()
-        top.addWidget(self.address_label, 1)
-        top.addWidget(again)
         buttons = QHBoxLayout()
         buttons.addStretch()
         buttons.addWidget(cancel)
         buttons.addWidget(self.create)
         layout = QVBoxLayout(self)
-        layout.addLayout(top)
+        layout.setContentsMargins(24, 22, 24, 20)
+        layout.setSpacing(10)
+        layout.addWidget(title)
+        layout.addWidget(intro)
+        layout.addSpacing(4)
+        layout.addWidget(address_box)
         layout.addWidget(self.label)
         layout.addWidget(self.note)
+        layout.addSpacing(6)
         layout.addLayout(buttons)
         self._update()
         self.regenerate()
@@ -349,21 +446,22 @@ class QuickCreateDialog(QDialog):
         self.win = win
         self.setWindowTitle("New Hide My Email address")
         self.setWindowIcon(app_icon())
-        self.setMinimumWidth(380)
-        self.label = QLineEdit(placeholderText="What's it for? e.g. Netflix")
+        self.setMinimumWidth(400)
+        self.label = QLineEdit(placeholderText="What's it for? For example Netflix")
         self.label.returnPressed.connect(self.create)
-        self.status = QLabel("Press Enter to create it and copy it.")
-        self.status.setWordWrap(True)
+        self.status = muted("Press Enter to create it and copy it.", Qt.AlignLeft)
         self.status.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        open_app = QPushButton("Open Hide My Email")
-        open_app.setFlat(True)
+        open_app = styled(QPushButton("Open Hide My Email"), "ghost")
         open_app.clicked.connect(lambda: (self.hide(), win.bring_to_front()))
-        hint = muted(HOTKEY_TEXT)
+        hint = muted(HOTKEY_TEXT, Qt.AlignRight)
         row = QHBoxLayout()
         row.addWidget(open_app)
         row.addStretch()
         row.addWidget(hint)
         v = QVBoxLayout(self)
+        v.setContentsMargins(20, 18, 20, 14)
+        v.setSpacing(10)
+        v.addWidget(heading("New address", "heading", Qt.AlignLeft))
         v.addWidget(self.label)
         v.addWidget(self.status)
         v.addLayout(row)
@@ -457,9 +555,9 @@ class MainWindow(QMainWindow):
         self.pool = QThreadPool.globalInstance()
         self.setWindowTitle("Hide My Email")
         self.setWindowIcon(app_icon())
-        self.resize(900, 580)
+        self.resize(980, 640)
+        self.setMinimumSize(760, 500)
 
-        self.delete_buttons: list[QPushButton] = []
         self.stack = QStackedWidget()
         self.update_bar = self._build_update_bar()
         central = QWidget()
@@ -469,10 +567,11 @@ class MainWindow(QMainWindow):
         cv.addWidget(self.update_bar)
         cv.addWidget(self.stack, 1)
         self.setCentralWidget(central)
-        self.statusBar().addPermanentWidget(muted(f"Version {APP_VERSION}"))
+        self.statusBar().setSizeGripEnabled(False)
+        self.statusBar().addPermanentWidget(QLabel(f"Version {APP_VERSION}"))
         self.update_ready: tuple[dict, Path] | None = None
         self._quitting = False
-        self.starting_page = centered(heading("Connecting to iCloud…", 14))
+        self.starting_page = centered(icon_label(48), 6, muted("Connecting to iCloud…"))
         self.login_page = self._build_login()
         self.code_page = self._build_code()
         self.main_page = self._build_main()
@@ -572,19 +671,17 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------ updates
 
     def _build_update_bar(self) -> QWidget:
-        bar = QWidget()
-        bar.setObjectName("updateBar")
+        bar = QWidget(objectName="updateBar")
+        bar.setAttribute(Qt.WA_StyledBackground, True)
         self.update_text = QLabel()
-        restart = QPushButton("Restart to update")
+        restart = styled(QPushButton("Restart to update"), "primary")
         restart.setObjectName("restart")
-        restart.setDefault(True)
         restart.clicked.connect(self.install_update)
-        later = QPushButton("Later")
+        later = styled(QPushButton("Later"), "ghost")
         later.setObjectName("later")
-        later.setFlat(True)
         later.clicked.connect(bar.hide)
         row = QHBoxLayout(bar)
-        row.setContentsMargins(12, 6, 12, 6)
+        row.setContentsMargins(16, 8, 12, 8)
         row.addWidget(self.update_text, 1)
         row.addWidget(later)
         row.addWidget(restart)
@@ -592,20 +689,12 @@ class MainWindow(QMainWindow):
         return bar
 
     def apply_theme(self, *_):
-        """Colours that don't come from the system palette, in light and dark variants."""
-        dark = is_dark_mode()
-        bg, border, fg, accent = (("#1d3557", "#2e5283", "#eef3fc", "#4c8dff") if dark
-                                  else ("#e8f0fe", "#c6d7f7", "#14213d", ACCENT))
-        self.update_bar.setStyleSheet(f"""
-            #updateBar {{ background: {bg}; border-bottom: 1px solid {border}; }}
-            #updateBar QLabel {{ color: {fg}; }}
-            #updateBar QPushButton#later {{ color: {fg}; background: transparent; border: none; padding: 4px 10px; }}
-            #updateBar QPushButton#restart {{ color: white; background: {accent}; border: none;
-                                             border-radius: 4px; padding: 5px 14px; }}
-        """)
-        red = "#ff7b72" if dark else "#c62828"
-        for button in self.delete_buttons:
-            button.setStyleSheet(f"color: {red};")
+        """Apply the light or dark design to the whole app (also when Windows switches)."""
+        theme.apply(QApplication.instance())
+        if hasattr(self, "search"):
+            self.search_action.setIcon(search_icon())
+        if hasattr(self, "list"):
+            self.list.viewport().update()
 
     def start_update_checks(self):
         """Check GitHub shortly after start and every few hours (only in released builds)."""
@@ -671,27 +760,29 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------ sign in
 
     def _build_login(self) -> QWidget:
-        self.apple_id = QLineEdit(placeholderText="Apple ID (email)")
+        self.apple_id = QLineEdit(placeholderText="Apple ID (email address)")
         self.password = QLineEdit(placeholderText="Password", echoMode=QLineEdit.Password)
         self.password.returnPressed.connect(self.sign_in)
-        button = QPushButton("Sign In")
+        button = styled(QPushButton("Sign In"), "primary")
         button.clicked.connect(self.sign_in)
         return centered(
+            icon_label(), 6,
             heading("Sign in to iCloud"),
-            muted("Your password is stored in Windows Credential Manager."),
-            self.apple_id, self.password, button,
+            muted("Use your Apple ID. Your password is stored securely in Windows Credential Manager."), 10,
+            self.apple_id, self.password, 4, button,
         )
 
     def _build_code(self) -> QWidget:
-        self.code = QLineEdit(placeholderText="123456", maxLength=6, alignment=Qt.AlignCenter)
-        self.code.setStyleSheet("font-size: 22px; letter-spacing: 6px;")
+        self.code = QLineEdit(placeholderText="000000", maxLength=6, alignment=Qt.AlignCenter)
+        self.code.setFont(theme.mono_font(18))
         self.code.returnPressed.connect(self.verify)
-        button = QPushButton("Verify")
+        button = styled(QPushButton("Verify"), "primary")
         button.clicked.connect(self.verify)
         return centered(
+            icon_label(), 6,
             heading("Enter verification code"),
-            muted("Apple sent a 6-digit code to your iPhone or other Apple devices."),
-            self.code, button,
+            muted("Apple sent a 6-digit code to your iPhone, iPad or Mac."), 10,
+            self.code, 4, button,
         )
 
     def start(self):
@@ -742,40 +833,54 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------ main page
 
     def _build_main(self) -> QWidget:
+        # Toolbar: the main action on the left, everything else under Options.
         self.toolbar = QToolBar("Main", movable=False)
+        self.toolbar.setContextMenuPolicy(Qt.PreventContextMenu)
         self.addToolBar(self.toolbar)
-        for text, shortcut, slot in (
-            ("New address", QKeySequence.New, self.new_alias),
-            ("Refresh", QKeySequence.Refresh, lambda: self.reload()),
-            ("Export CSV…", None, self.export_csv),
-            ("Check for updates", None, lambda: self.check_for_updates(manual=True)),
-            ("Sign out", None, self.sign_out),
-        ):
-            action = QAction(text, self)
-            if shortcut:
-                action.setShortcut(shortcut)
+        new_button = styled(QPushButton("+  New address"), "primary")
+        new_button.setToolTip("New address (Ctrl+N)")
+        new_button.clicked.connect(self.new_alias)
+        self.toolbar.addWidget(new_button)
+        refresh = QToolButton(text="Refresh", toolTip="Refresh (F5)")
+        refresh.clicked.connect(lambda: self.reload())
+        self.toolbar.addWidget(refresh)
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.toolbar.addWidget(spacer)
+        for shortcut, slot in ((QKeySequence.New, self.new_alias), (QKeySequence.Refresh, lambda: self.reload())):
+            action = QAction(self, shortcut=shortcut)
             action.triggered.connect(slot)
-            self.toolbar.addAction(action)
+            self.addAction(action)
+
         self.keep_running_action = QAction("Keep running in the tray when closed", self, checkable=True)
         self.keep_running_action.setChecked(self.keep_running())
         self.keep_running_action.toggled.connect(self._set_keep_running)
         options = QMenu("Options", self)
+        options.addAction("Export CSV…", self.export_csv)
+        options.addAction("Check for updates", lambda: self.check_for_updates(manual=True))
+        options.addSeparator()
         options.addAction(self.keep_running_action)
-        options_button = QToolButton(text="Options", popupMode=QToolButton.InstantPopup)
+        options.addSeparator()
+        options.addAction("Sign out", self.sign_out)
+        options_button = QToolButton(text="Options  ▾", popupMode=QToolButton.InstantPopup)
         options_button.setMenu(options)
         self.toolbar.addWidget(options_button)
 
-        self.search = QLineEdit(placeholderText="Search address, label, note, website", clearButtonEnabled=True)
+        # Left: search, filter, sort and the list.
+        self.search = QLineEdit(placeholderText="Search addresses, labels, notes, websites", clearButtonEnabled=True)
+        self.search_action = self.search.addAction(search_icon(), QLineEdit.LeadingPosition)
         self.search.textChanged.connect(self.refresh_list)
-        self.filter = QComboBox()
-        self.filter.addItems(["Active", "Inactive", "All"])
-        self.filter.currentIndexChanged.connect(self.refresh_list)
+        self.filter = Segmented(["Active", "Inactive", "All"])
+        self.filter.changed.connect(self.refresh_list)
         self.sort = QComboBox(toolTip="Sort addresses")
         self.sort.addItems(SORT_ORDERS)
         self.sort.setCurrentText(QSettings("HideMyEmail", "HideMyEmail").value("sort", SORT_ORDERS[0]))
         self.sort.currentTextChanged.connect(self._sort_changed)
-        self.list = QListWidget()
-        self.list.setAlternatingRowColors(True)
+        self.list = QListWidget(objectName="aliasList")
+        self.list.setItemDelegate(theme.AliasDelegate(self.list))
+        self.list.setMouseTracking(True)
+        self.list.setUniformItemSizes(True)
+        self.list.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.list.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.list.itemSelectionChanged.connect(self.show_detail)
         self.list.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -784,116 +889,158 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence.Delete, self.list, lambda: self.ask_delete(self.selected()),
                   context=Qt.WidgetShortcut)
         self.count = QLabel()
-        self.count.setStyleSheet("color: palette(placeholder-text);")
+        self.count.setProperty("role", "muted")
 
-        left = QWidget()
+        left = QWidget(objectName="page")
         lv = QVBoxLayout(left)
-        top = QHBoxLayout()
-        top.addWidget(self.search, 1)
-        options = QHBoxLayout()
-        options.addWidget(self.filter)
-        options.addStretch()
-        options.addWidget(QLabel("Sort:"))
-        options.addWidget(self.sort)
-        lv.addLayout(top)
-        lv.addLayout(options)
+        lv.setContentsMargins(16, 16, 8, 12)
+        lv.setSpacing(10)
+        options_row = QHBoxLayout()
+        options_row.addWidget(self.filter)
+        options_row.addStretch()
+        options_row.addWidget(self.sort)
+        lv.addWidget(self.search)
+        lv.addLayout(options_row)
         lv.addWidget(self.list, 1)
         lv.addWidget(self.count)
 
+        # Right: details of the selection.
         self.detail_stack = QStackedWidget()
-        self.empty_detail = centered(muted(
-            "Select an address, or press Ctrl+N to create one.\n"
-            "Ctrl-click or Shift-click to select several."))
+        self.empty_detail = centered(
+            icon_label(48), 8, heading("No address selected", "heading"),
+            muted("Select an address to see its details, or press Ctrl+N to create one. "
+                  "Ctrl-click or Shift-click to select several."), width=380)
         self.detail = self._build_detail()
         self.batch = self._build_batch()
         for page in (self.empty_detail, self.detail, self.batch):
             self.detail_stack.addWidget(page)
 
-        splitter = QSplitter()
+        splitter = QSplitter(objectName="page")
+        splitter.setHandleWidth(8)
         splitter.addWidget(left)
         splitter.addWidget(self.detail_stack)
-        splitter.setSizes([340, 560])
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([360, 620])
         return splitter
 
     def _build_detail(self) -> QWidget:
-        self.d_address = QLabel()
-        self.d_address.setStyleSheet("font-family: Consolas, Menlo, monospace; font-size: 16px;")
-        self.d_address.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        copy = QPushButton("Copy")
-        copy.clicked.connect(lambda: self.copy(self.current()["hme"]))
+        # Header: label, status, address with Copy.
+        self.d_title = heading("", "title", Qt.AlignLeft)
         self.d_status = QLabel()
-        self.d_forward = QLabel()
-        self.d_created = QLabel()
-        self.d_origin = QLabel()
-        self.d_label = QLineEdit()
-        self.d_note = QPlainTextEdit()
-        self.d_note.setMaximumHeight(110)
-        self.save = QPushButton("Save")
-        self.save.clicked.connect(self.save_detail)
-        self.toggle = QPushButton()
-        self.toggle.clicked.connect(self.toggle_active)
-        delete = QPushButton("Delete…")
-        self.delete_buttons.append(delete)
-        delete.clicked.connect(lambda: self.ask_delete(self.selected(), allow_deactivate=False))
+        self.d_address = QLabel()
+        self.d_address.setFont(theme.mono_font(10.5))
+        self.d_address.setProperty("role", "address")
+        self.d_address.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        copy = QPushButton("Copy address")
+        copy.clicked.connect(lambda: self.copy(self.current()["hme"]))
+        title_row = QHBoxLayout()
+        title_row.setSpacing(10)
+        title_row.addWidget(self.d_title)
+        title_row.addWidget(self.d_status, 0, Qt.AlignVCenter)
+        title_row.addStretch()
+        address_row = QHBoxLayout()
+        address_row.addWidget(self.d_address, 1)
+        address_row.addWidget(copy)
 
-        head = QHBoxLayout()
-        head.addWidget(self.d_address, 1)
-        head.addWidget(copy)
-        form = QFormLayout()
-        form.addRow("Status", self.d_status)
-        form.addRow("Forwards to", self.d_forward)
-        form.addRow("Created", self.d_created)
-        form.addRow("Created from", self.d_origin)
-        form.addRow("Label", self.d_label)
-        form.addRow("Note", self.d_note)
+        # Details card.
+        info, info_layout = card()
+        info_layout.addWidget(section("Details"))
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(24)
+        grid.setVerticalSpacing(10)
+        self.d_forward, self.d_created, self.d_origin = QLabel(), QLabel(), QLabel()
+        for row, (key, value) in enumerate((("Forwards to", self.d_forward), ("Created", self.d_created),
+                                            ("Created from", self.d_origin))):
+            k = QLabel(key)
+            k.setProperty("role", "key")
+            value.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            value.setWordWrap(True)
+            grid.addWidget(k, row, 0, Qt.AlignTop)
+            grid.addWidget(value, row, 1)
+        grid.setColumnStretch(1, 1)
+        info_layout.addLayout(grid)
+
+        # Label and note card.
+        edit, edit_layout = card(8)
+        edit_layout.addWidget(section("Label and note"))
+        self.d_label = QLineEdit(placeholderText="Label")
+        self.d_note = QPlainTextEdit(placeholderText="Note")
+        self.d_note.setFixedHeight(84)
+        self.d_edit_hint = muted("Reactivate this address to change its label or note.", Qt.AlignLeft)
+        self.save = styled(QPushButton("Save"), "primary")
+        self.save.clicked.connect(self.save_detail)
+        self.d_label.textChanged.connect(self._update_save)
+        self.d_note.textChanged.connect(self._update_save)
         save_row = QHBoxLayout()
+        save_row.addWidget(self.d_edit_hint, 1)
         save_row.addStretch()
         save_row.addWidget(self.save)
+        edit_layout.addWidget(self.d_label)
+        edit_layout.addWidget(self.d_note)
+        edit_layout.addLayout(save_row)
+
+        # Status card.
+        status, status_layout = card(8)
+        status_layout.addWidget(section("Forwarding"))
+        self.d_status_text = muted("", Qt.AlignLeft)
+        self.toggle = QPushButton()
+        self.toggle.clicked.connect(self.toggle_active)
+        delete = styled(QPushButton("Delete…"), "danger")
+        delete.clicked.connect(lambda: self.ask_delete(self.selected(), allow_deactivate=False))
         actions = QHBoxLayout()
         actions.addWidget(self.toggle)
         actions.addStretch()
         actions.addWidget(delete)
-        hint = muted("Deactivating stops forwarding but keeps the address. Deleting removes it for good.")
-        hint.setAlignment(Qt.AlignLeft)
+        status_layout.addWidget(self.d_status_text)
+        status_layout.addLayout(actions)
 
-        page = QWidget()
-        v = QVBoxLayout(page)
-        v.setContentsMargins(20, 16, 20, 16)
-        v.addLayout(head)
-        v.addSpacing(8)
-        v.addLayout(form)
-        v.addLayout(save_row)
+        content = QWidget(objectName="page")
+        v = QVBoxLayout(content)
+        v.setContentsMargins(16, 18, 20, 18)
+        v.setSpacing(14)
+        v.addLayout(title_row)
+        v.addLayout(address_row)
+        v.addSpacing(4)
+        v.addWidget(info)
+        v.addWidget(edit)
+        v.addWidget(status)
         v.addStretch()
-        v.addLayout(actions)
-        v.addWidget(hint)
-        return page
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setWidget(content)
+        return scroll
+
+    def _update_save(self):
+        a = self.current()
+        dirty = bool(a) and (self.d_label.text() != (a.get("label") or "")
+                             or self.d_note.toPlainText() != (a.get("note") or ""))
+        self.save.setEnabled(dirty and a.get("isActive", True))
 
     def _build_batch(self) -> QWidget:
-        self.b_title = heading("", 16)
+        self.b_title = heading("", "title")
         self.b_counts = muted("")
         buttons = QHBoxLayout()
         buttons.addStretch()
-        for text, slot in (
-            ("Copy all", self.copy_selected),
-            ("Deactivate", lambda: self.set_active(self.selected(), False)),
-            ("Reactivate", lambda: self.set_active(self.selected(), True)),
-            ("Delete…", lambda: self.ask_delete(self.selected(), allow_deactivate=False)),
+        for text, slot, kind in (
+            ("Copy all", self.copy_selected, None),
+            ("Deactivate", lambda: self.set_active(self.selected(), False), None),
+            ("Reactivate", lambda: self.set_active(self.selected(), True), None),
+            ("Delete…", lambda: self.ask_delete(self.selected(), allow_deactivate=False), "danger"),
         ):
             button = QPushButton(text)
+            if kind:
+                styled(button, kind)
             button.clicked.connect(slot)
-            if text.startswith("Delete"):
-                self.delete_buttons.append(button)
             buttons.addWidget(button)
         buttons.addStretch()
-        page = QWidget()
-        v = QVBoxLayout(page)
-        v.addStretch()
-        v.addWidget(self.b_title)
-        v.addWidget(self.b_counts)
-        v.addSpacing(12)
-        v.addLayout(buttons)
-        v.addStretch()
-        return page
+        box, layout = card(10)
+        layout.setContentsMargins(28, 26, 28, 26)
+        layout.addWidget(self.b_title)
+        layout.addWidget(self.b_counts)
+        layout.addSpacing(8)
+        layout.addLayout(buttons)
+        return centered(box, width=500)
 
     def show_main(self):
         self.toolbar.setVisible(True)
@@ -932,12 +1079,8 @@ class MainWindow(QMainWindow):
         self.list.clear()
         shown = self.visible()
         for a in shown:
-            active = a.get("isActive", True)
-            item = QListWidgetItem(dot_icon("#2e9d4f" if active else "#b0b0b0"),
-                                   f"{a.get('label') or 'No label'}\n{a.get('hme')}")
+            item = QListWidgetItem(f"{a.get('label') or 'No label'} {a.get('hme')}")  # text for accessibility
             item.setData(Qt.UserRole, a)
-            if not a.get("isActive", True):
-                item.setForeground(QColor("gray"))
             self.list.addItem(item)
             if a.get("hme") in keep:
                 item.setSelected(True)
@@ -958,8 +1101,8 @@ class MainWindow(QMainWindow):
     def show_detail(self, *_):
         chosen = self.selected()
         shown = self.list.count()
-        self.count.setText(f"{len(chosen)} selected · {shown} of {len(self.aliases)} addresses"
-                           if len(chosen) > 1 else f"{shown} of {len(self.aliases)} addresses")
+        self.count.setText(f"{len(chosen)} selected  ·  {shown} of {plural(len(self.aliases))}"
+                           if len(chosen) > 1 else f"{shown} of {plural(len(self.aliases))}")
         if len(chosen) > 1:
             active = sum(a.get("isActive", True) for a in chosen)
             self.b_title.setText(f"{len(chosen)} addresses selected")
@@ -971,14 +1114,27 @@ class MainWindow(QMainWindow):
             self.detail_stack.setCurrentWidget(self.empty_detail)
             return
         self.detail_stack.setCurrentWidget(self.detail)
-        self.d_origin.setText(origin_text(a) or "—")
         active = a.get("isActive", True)
+        self.d_title.setText(a.get("label") or "No label")
+        self.d_status.setText("Active" if active else "Inactive")
+        self.d_status.setProperty("role", "pill-active" if active else "pill-inactive")
+        self.d_status.style().unpolish(self.d_status)
+        self.d_status.style().polish(self.d_status)
         self.d_address.setText(a.get("hme", ""))
-        self.d_status.setText("Active — forwarding mail" if active else "Inactive — not forwarding")
-        self.d_forward.setText(a.get("forwardToEmail") or "")
-        self.d_created.setText(fmt_date(a.get("createTimestamp")))
+        self.d_forward.setText(a.get("forwardToEmail") or "—")
+        self.d_created.setText(fmt_date(a.get("createTimestamp")) or "—")
+        self.d_origin.setText(origin_text(a) or "—")
         self.d_label.setText(a.get("label") or "")
         self.d_note.setPlainText(a.get("note") or "")
+        self.d_label.setEnabled(active)
+        self.d_note.setEnabled(active)
+        self.d_edit_hint.setVisible(not active)
+        self._update_save()
+        self.d_status_text.setText(
+            "Mail sent to this address is forwarded to your inbox. Deactivate it to stop forwarding; "
+            "you can turn it back on later." if active else
+            "Mail sent to this address is not forwarded. Reactivate it to receive mail again, "
+            "or delete it for good.")
         self.toggle.setText("Deactivate" if active else "Reactivate")
 
     # ------------------------------------------------------------ actions
@@ -1122,6 +1278,7 @@ def selftest(out_dir: str) -> int:
         return 1
 
     app = QApplication.instance() or QApplication(sys.argv)
+    theme.apply(app)
     win = MainWindow(Backend())
     win.setup_tray()
     report.write(f"tray available: {win.tray is not None}\n")
@@ -1217,7 +1374,7 @@ def main() -> int:
         return 0
     app = QApplication(sys.argv)
     app.setApplicationName("Hide My Email")
-    app.setStyle("Fusion") if sys.platform != "win32" else None
+    theme.apply(app)
     win = MainWindow(Backend())
     win.setup_tray()
     win.show()

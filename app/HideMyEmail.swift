@@ -604,7 +604,7 @@ struct MainView: View {
         } message: {
             Text("Deactivating stops forwarding but keeps the address. Deleting removes it for good: mail sent to it will bounce.")
         }
-        .searchable(text: $model.search, placement: .sidebar, prompt: "Search address, label, note")
+        .searchable(text: $model.search, placement: .sidebar, prompt: "Search addresses, labels, notes, websites")
         .toolbar {
             ToolbarItem(placement: .navigation) {
                 Picker("Show", selection: $model.filter) {
@@ -670,8 +670,8 @@ struct BatchDetail: View {
     var body: some View {
         let active = aliases.filter(\.isActive).count
         VStack(spacing: 18) {
-            Image(systemName: "square.stack.3d.up").font(.system(size: 44)).foregroundStyle(.tint)
-            Text("\(aliases.count) addresses selected").font(.title2.bold())
+            Image(systemName: "square.stack.3d.up").font(.system(size: 40, weight: .light)).foregroundStyle(.secondary)
+            Text("\(aliases.count) addresses selected").font(.title2.weight(.semibold))
             Text("\(active) active, \(aliases.count - active) inactive").foregroundStyle(.secondary)
             HStack {
                 Button("Copy All") { model.copy(aliases.map(\.address).joined(separator: "\n")) }
@@ -687,20 +687,41 @@ struct BatchDetail: View {
     }
 }
 
+/// Small rounded tag: "Active" (green) or "Inactive" (grey).
+struct StatusBadge: View {
+    let active: Bool
+    var compact = false
+
+    var body: some View {
+        Text(active ? "Active" : "Inactive")
+            .font(.system(size: compact ? 10 : 11, weight: .semibold))
+            .padding(.horizontal, compact ? 6 : 8)
+            .padding(.vertical, compact ? 1 : 2)
+            .foregroundStyle(active ? Color.green : Color.secondary)
+            .background((active ? Color.green : Color.secondary).opacity(0.14), in: Capsule())
+    }
+}
+
 struct AliasRow: View {
     let alias: Alias
 
     var body: some View {
-        HStack(spacing: 10) {
-            Circle().fill(alias.isActive ? Color.green : Color.secondary.opacity(0.4)).frame(width: 8, height: 8)
-            VStack(alignment: .leading, spacing: 2) {
+        HStack(alignment: .center, spacing: 8) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text(alias.label.isEmpty ? "No label" : alias.label)
-                    .fontWeight(.medium)
-                    .foregroundStyle(alias.label.isEmpty ? .secondary : .primary)
-                Text(alias.address).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    .font(.body.weight(.medium))
+                    .foregroundStyle(alias.label.isEmpty || !alias.isActive ? .secondary : .primary)
+                    .lineLimit(1)
+                Text(alias.address)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
             }
+            Spacer(minLength: 4)
+            if !alias.isActive { StatusBadge(active: false, compact: true) }
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 5)
     }
 }
 
@@ -714,55 +735,86 @@ struct AliasDetail: View {
     private var dirty: Bool { label != alias.label || note != alias.note }
 
     var body: some View {
-        Form {
-            Section {
-                HStack {
-                    Text(alias.address).font(.title3.monospaced()).textSelection(.enabled)
-                    Spacer()
-                    Button { model.copy(alias.address) } label: { Label("Copy", systemImage: "doc.on.doc") }
-                        .keyboardShortcut("c", modifiers: [.command, .shift])
+        VStack(spacing: 0) {
+            header
+            Form {
+                Section("Details") {
+                    LabeledContent("Forwards to", value: alias.forwardTo.isEmpty ? "—" : alias.forwardTo)
+                    LabeledContent("Created",
+                                   value: alias.created?.formatted(date: .long, time: .shortened) ?? "—")
+                    LabeledContent("Created from", value: alias.origin.isEmpty ? "—" : alias.origin)
                 }
-                LabeledContent("Status", value: alias.isActive ? "Active — forwarding mail" : "Inactive — not forwarding")
-                if !alias.forwardTo.isEmpty { LabeledContent("Forwards to", value: alias.forwardTo) }
-                if let created = alias.created {
-                    LabeledContent("Created", value: created.formatted(date: .long, time: .shortened))
-                }
-                if !alias.origin.isEmpty { LabeledContent("Created from", value: alias.origin) }
-            }
-            Section("Details") {
-                TextField("Label", text: $label)
-                TextField("Note", text: $note, axis: .vertical).lineLimit(3...8)
-                HStack {
-                    Spacer()
-                    Button("Revert") { label = alias.label; note = alias.note }.disabled(!dirty)
-                    Button("Save") { Task { await model.save(alias, label: label, note: note) } }
-                        .keyboardShortcut("s")
-                        .disabled(!dirty || model.busy)
-                }
-            }
-            Section {
-                HStack {
-                    if alias.isActive {
-                        Button("Deactivate") { Task { await model.setActive([alias], false) } }
-                    } else {
-                        Button("Reactivate") { Task { await model.setActive([alias], true) } }
+                Section {
+                    TextField("Label", text: $label)
+                    TextField("Note", text: $note, axis: .vertical).lineLimit(3...8)
+                } header: {
+                    Text("Label and Note")
+                } footer: {
+                    HStack {
+                        if !alias.isActive {
+                            Text("Reactivate this address to change its label or note.")
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("Revert") { label = alias.label; note = alias.note }.disabled(!dirty)
+                        Button("Save") { Task { await model.save(alias, label: label, note: note) } }
+                            .keyboardShortcut("s")
+                            .buttonStyle(.borderedProminent)
+                            .disabled(!dirty || model.busy || !alias.isActive)
                     }
-                    Spacer()
-                    Button("Delete…", role: .destructive) { confirmDelete = true }
                 }
-                .disabled(model.busy)
-            } footer: {
-                Text("Deactivating stops forwarding but keeps the address. Deleting removes it for good.")
-                    .foregroundStyle(.secondary)
+                .disabled(!alias.isActive)
+                Section {
+                    Text(alias.isActive
+                         ? "Mail sent to this address is forwarded to your inbox. Deactivate it to stop forwarding; you can turn it back on later."
+                         : "Mail sent to this address is not forwarded. Reactivate it to receive mail again, or delete it for good.")
+                        .foregroundStyle(.secondary)
+                    HStack {
+                        if alias.isActive {
+                            Button("Deactivate") { Task { await model.setActive([alias], false) } }
+                        } else {
+                            Button("Reactivate") { Task { await model.setActive([alias], true) } }
+                        }
+                        Spacer()
+                        Button("Delete…", role: .destructive) { confirmDelete = true }
+                    }
+                    .disabled(model.busy)
+                } header: {
+                    Text("Forwarding")
+                }
             }
+            .formStyle(.grouped)
         }
-        .formStyle(.grouped)
         .onAppear { label = alias.label; note = alias.note }
         .confirmationDialog("Delete \(alias.address)?", isPresented: $confirmDelete) {
             Button("Delete Permanently", role: .destructive) { Task { await model.delete([alias]) } }
         } message: {
             Text("Mail sent to this address will bounce. This cannot be undone.")
         }
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text(alias.label.isEmpty ? "No label" : alias.label)
+                    .font(.title2.weight(.semibold))
+                    .lineLimit(1)
+                StatusBadge(active: alias.isActive)
+                Spacer()
+            }
+            HStack {
+                Text(alias.address)
+                    .font(.system(.body, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                Spacer()
+                Button { model.copy(alias.address) } label: { Label("Copy Address", systemImage: "doc.on.doc") }
+                    .keyboardShortcut("c", modifiers: [.command, .shift])
+            }
+        }
+        .padding(.horizontal, 28)
+        .padding(.top, 22)
+        .padding(.bottom, 4)
     }
 }
 
@@ -1111,6 +1163,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+#if !SNAPSHOT
 @main
 struct HideMyEmailApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
@@ -1142,3 +1195,72 @@ struct HideMyEmailApp: App {
         .menuBarExtraStyle(.window)
     }
 }
+#endif
+
+#if SNAPSHOT
+// Design previews: `swiftc -D SNAPSHOT ...` builds a tool that draws the main screens with
+// sample data into PNG files, off-screen, without connecting to iCloud. Not part of the app.
+extension AppModel {
+    func loadSample() {
+        started = true
+        appleId = "me@example.com"
+        let now = Date().timeIntervalSince1970 * 1000
+        aliases = [
+            ["hme": "quiet-otter_7k@icloud.com", "label": "Netflix", "note": "Streaming account", "isActive": true,
+             "createTimestamp": now - 4e9, "anonymousId": "a", "forwardToEmail": "me@example.com",
+             "origin": "SAFARI", "domain": "netflix.com"],
+            ["hme": "brisk-maple.2q@icloud.com", "label": "Bol.com", "note": "", "isActive": true,
+             "createTimestamp": now - 9e9, "anonymousId": "b", "forwardToEmail": "me@example.com", "origin": "ON_DEMAND"],
+            ["hme": "lunar-pebble04@icloud.com", "label": "Old newsletter", "note": "", "isActive": false,
+             "createTimestamp": now - 3e10, "anonymousId": "c", "forwardToEmail": "me@example.com"],
+        ].map(Alias.init)
+        phase = .ready
+        filter = .all
+    }
+}
+
+@main
+enum SnapshotMain {
+    static func main() {
+        let app = NSApplication.shared
+        app.setActivationPolicy(.prohibited)
+        let out = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
+        let dark = CommandLine.arguments.contains("--dark")
+        app.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        let model = AppModel.shared
+        model.loadSample()
+        var keep: [NSWindow] = []
+        let shots: [(String, NSSize, Set<String>, AnyView)] = [
+            ("main", NSSize(width: 1040, height: 680), ["a"], AnyView(MainView())),
+            ("inactive", NSSize(width: 1040, height: 680), ["c"], AnyView(MainView())),
+            ("batch", NSSize(width: 1040, height: 680), ["a", "b", "c"], AnyView(MainView())),
+            ("empty", NSSize(width: 1040, height: 680), [], AnyView(MainView())),
+            ("login", NSSize(width: 760, height: 520), [], AnyView(LoginView())),
+            ("quick", NSSize(width: 340, height: 170), [], AnyView(QuickCreateView())),
+        ]
+        for (i, shot) in shots.enumerated() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 1.5) {
+                model.selection = shot.2
+                let window = NSWindow(contentRect: NSRect(origin: NSPoint(x: -30000, y: -30000), size: shot.1),
+                                      styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                                      backing: .buffered, defer: false)
+                window.title = "Hide My Email"
+                window.contentView = NSHostingView(rootView: shot.3.environmentObject(model))
+                window.setFrame(NSRect(origin: NSPoint(x: -30000, y: -30000), size: shot.1), display: true)
+                window.orderFrontRegardless()
+                keep.append(window)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                    let view = window.contentView!.superview ?? window.contentView!
+                    guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
+                    view.cacheDisplay(in: view.bounds, to: rep)
+                    try? rep.representation(using: .png, properties: [:])?
+                        .write(to: out.appendingPathComponent("\(dark ? "dark" : "light")-\(shot.0).png"))
+                    window.orderOut(nil)
+                }
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + Double(shots.count) * 1.5 + 1.5) { exit(0) }
+        app.run()
+    }
+}
+#endif
