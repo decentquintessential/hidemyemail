@@ -881,6 +881,7 @@ class MainWindow(QMainWindow):
         self.list.setMouseTracking(True)
         self.list.setUniformItemSizes(True)
         self.list.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)  # rows elide long text instead
         self.list.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.list.itemSelectionChanged.connect(self.show_detail)
         self.list.setContextMenuPolicy(Qt.CustomContextMenu)

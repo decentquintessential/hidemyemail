@@ -112,8 +112,8 @@ def style_sheet() -> str:
     QWidget#segmented {{ background: {c['hover']}; border: 1px solid {c['border']}; border-radius: 7px; }}
     QWidget#segmented QPushButton {{ background: transparent; border: none; border-radius: 5px;
                                      padding: 4px 12px; color: {c['muted']}; min-height: 16px; }}
-    QWidget#segmented QPushButton:checked {{ background: {c['surface']}; color: {c['text']}; font-weight: 600;
-                                             border: 1px solid {c['border']}; }}
+    QWidget#segmented QPushButton:checked {{ background: {c['surface']}; color: {c['text']};
+                                             border: 1px solid {c['border_strong']}; }}
 
     QLineEdit, QPlainTextEdit, QComboBox {{ background: {c['input']}; border: 1px solid {c['border_strong']};
                                             border-radius: 6px; padding: 6px 8px;
@@ -152,6 +152,8 @@ def style_sheet() -> str:
     QScrollArea > QWidget > QWidget {{ background: transparent; }}
     QScrollBar:vertical {{ background: transparent; width: 10px; margin: 2px; }}
     QScrollBar::handle:vertical {{ background: {c['border_strong']}; border-radius: 3px; min-height: 30px; }}
+    QScrollBar:horizontal {{ background: transparent; height: 10px; margin: 2px; }}
+    QScrollBar::handle:horizontal {{ background: {c['border_strong']}; border-radius: 3px; min-width: 30px; }}
     QScrollBar::add-line, QScrollBar::sub-line, QScrollBar::add-page, QScrollBar::sub-page {{ height: 0; background: none; }}
 
     QMenu {{ background: {c['surface']}; border: 1px solid {c['border']}; border-radius: 8px; padding: 4px; }}
@@ -168,7 +170,7 @@ def style_sheet() -> str:
 class AliasDelegate(QStyledItemDelegate):
     """Draws one address: label on top, address below, and an "Inactive" tag when off."""
 
-    ROW_HEIGHT = 56
+    ROW_HEIGHT = 46
 
     def sizeHint(self, option, index) -> QSize:
         return QSize(option.rect.width(), self.ROW_HEIGHT)
@@ -178,7 +180,7 @@ class AliasDelegate(QStyledItemDelegate):
         selected = bool(option.state & QStyle.State_Selected)
         hovered = bool(option.state & QStyle.State_MouseOver)
         active = alias.get("isActive", True)
-        rect = option.rect.adjusted(2, 2, -2, -2)
+        rect = option.rect.adjusted(2, 1, -2, -1)
 
         painter.save()
         painter.setRenderHint(QPainter.Antialiasing)
@@ -187,7 +189,7 @@ class AliasDelegate(QStyledItemDelegate):
             path.addRoundedRect(QRectF(rect), 7, 7)
             painter.fillPath(path, QColor(t("accent_soft") if selected else t("hover")))
         if selected:
-            bar = QRectF(rect.left() + 1, rect.top() + 10, 3, rect.height() - 20)
+            bar = QRectF(rect.left() + 1, rect.top() + 8, 3, rect.height() - 16)
             path = QPainterPath()
             path.addRoundedRect(bar, 1.5, 1.5)
             painter.fillPath(path, QColor(t("accent")))
@@ -213,14 +215,14 @@ class AliasDelegate(QStyledItemDelegate):
         title_font = ui_font(10.5, QFont.DemiBold)
         painter.setFont(title_font)
         painter.setPen(QColor(t("text") if (alias.get("label") and active) else t("muted")))
-        title_rect = QRect(left, rect.top() + 9, right - left, 20)
+        title_rect = QRect(left, rect.top() + 4, right - left, 19)
         painter.drawText(title_rect, Qt.AlignLeft | Qt.AlignVCenter,
                          QFontMetrics(title_font).elidedText(label, Qt.ElideRight, title_rect.width()))
 
         sub_font = ui_font(9)
         painter.setFont(sub_font)
         painter.setPen(QColor(t("muted") if active else t("subtle")))
-        sub_rect = QRect(left, rect.top() + 29, right - left, 18)
+        sub_rect = QRect(left, rect.top() + 22, right - left, 17)
         painter.drawText(sub_rect, Qt.AlignLeft | Qt.AlignVCenter,
                          QFontMetrics(sub_font).elidedText(alias.get("hme", ""), Qt.ElideMiddle, sub_rect.width()))
         painter.restore()
