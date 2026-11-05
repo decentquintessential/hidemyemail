@@ -46,6 +46,15 @@ class AccountError(Exception):
     """Something went wrong talking to the Apple Account site; the message is for the user."""
 
 
+RATE_LIMITED = ("Apple is temporarily limiting sign-ins to your Apple Account, usually after several "
+                "attempts in a short time. Wait a few hours (or until tomorrow), then try again.")
+
+
+def check_rate_limit(response: requests.Response) -> None:
+    if response.status_code in (429, 503):
+        raise AccountError(RATE_LIMITED)
+
+
 class CodeRequired(Exception):
     """Apple wants a 2FA code before it shows the list."""
 
@@ -150,8 +159,8 @@ class AppleAccount:
         r = self._keep(self.http.post(f"{AUTH}/signin/init", headers=self._auth_headers(), json={
             "a": b64_encode(a), "accountName": name, "protocols": [p.value for p in SrpProtocolType]}),
             "signin/init")
+        check_rate_limit(r)
         if r.status_code != 200:
-            log.warning("apple account signin/init: HTTP %s", r.status_code)
             raise AccountError(f"Apple didn't accept the sign-in (step 1, HTTP {r.status_code}).")
         body = r.json()
         salt, b = base64.b64decode(body["salt"]), base64.b64decode(body["b"])
@@ -162,6 +171,7 @@ class AppleAccount:
             json={"accountName": name, "c": body["c"], "m1": b64_encode(m1), "m2": b64_encode(user.H_AMK),
                   "rememberMe": True, "trustTokens": [self.trust_token] if self.trust_token else []}),
             f"signin/complete (trust token sent: {bool(self.trust_token)})")
+        check_rate_limit(r)
         if r.status_code == 409:
             if request_code:
                 # Ask Apple to send a code to the trusted devices.
@@ -177,6 +187,7 @@ class AppleAccount:
     def verify_code(self, code: str, apple_id: str, password: str) -> None:
         r = self._keep(self.http.post(f"{AUTH}/verify/trusteddevice/securitycode", headers=self._auth_headers(),
                                       json={"securityCode": {"code": code.strip()}}), "verify code")
+        check_rate_limit(r)
         valid = r.status_code in (200, 204)
         if r.status_code == 409:  # newer flow: 409 with a "valid" flag in the body
             try:
