@@ -16,11 +16,12 @@ Nothing here changes the account.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import logging
 import pickle
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -87,6 +88,24 @@ class AppleAccount:
         self.state_file.write_bytes(pickle.dumps(state))
         self.state_file.chmod(0o600)
 
+    def start_fresh(self) -> None:
+        """Drop an expired session before signing in again. Old session cookies make Apple refuse
+        the new session; only the "trusted browser" cookies (DES…) are kept, so Apple asks for
+        a verification code as rarely as possible."""
+        keep = [c for c in self.http.cookies if c.name.startswith("DES")]
+        self.http.cookies.clear()
+        for cookie in keep:
+            self.http.cookies.set_cookie(cookie)
+        for header in ECHO_HEADERS + ("X-Apple-HC",):
+            self.http.headers.pop(header, None)
+        log.info("apple account: starting a fresh session (kept %d trust cookie(s))", len(keep))
+
+    def _clear_account_site_cookies(self) -> None:
+        """Remove appleid.apple.com session cookies so the session that opens next is the new one."""
+        for cookie in list(self.http.cookies):
+            if "appleid.apple.com" in (cookie.domain or ""):
+                self.http.cookies.clear(cookie.domain, cookie.path, cookie.name)
+
     def forget(self) -> None:
         self.state_file.unlink(missing_ok=True)
         self.http.cookies.clear()
@@ -98,6 +117,9 @@ class AppleAccount:
                 self.http.headers[header] = response.headers[header]
         if response.headers.get("X-Apple-TwoSV-Trust-Token"):
             self.trust_token = response.headers["X-Apple-TwoSV-Trust-Token"]
+        bits, challenge = response.headers.get("X-Apple-HC-Bits"), response.headers.get("X-Apple-HC-Challenge")
+        if bits and challenge:
+            self.http.headers["X-Apple-HC"] = hashcash(int(bits), challenge)
         if step:
             # Names only, never values: enough to see what Apple did at each step.
             apple_headers = sorted(h for h in response.headers if h.lower().startswith(("x-apple", "scnt")))
@@ -149,6 +171,7 @@ class AppleAccount:
         if r.status_code != 200:
             raise AccountError(f"Apple didn't accept the sign-in (HTTP {r.status_code}). "
                                "If you changed your Apple ID password, sign out and in again.")
+        self._clear_account_site_cookies()
         self._open_api()
 
     def verify_code(self, code: str, apple_id: str, password: str) -> None:
@@ -166,6 +189,7 @@ class AppleAccount:
                    "trust")
         log.info("apple account trust token received: %s", bool(self.trust_token))
         self._save()
+        self._clear_account_site_cookies()
         if self._open_api(raise_on_failure=False):
             return
         # The code makes this device trusted, but the account session only opens after a
@@ -203,6 +227,19 @@ class AppleAccount:
         data = r.json()
         log.info("apple account list layout: %s", describe(data))
         return data
+
+
+def hashcash(bits: int, challenge: str) -> str:
+    """Apple's sign-in proof of work (X-Apple-HC): a stamp "1:bits:date:challenge::counter"
+    whose SHA-1 starts with `bits` zero bits. Same scheme as fastlane's Spaceship client."""
+    date = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    counter = 0
+    while True:
+        stamp = f"1:{bits}:{date}:{challenge}::{counter}"
+        digest = int.from_bytes(hashlib.sha1(stamp.encode()).digest(), "big")
+        if digest >> (160 - bits) == 0:
+            return stamp
+        counter += 1
 
 
 def describe(data: Any, depth: int = 0) -> Any:

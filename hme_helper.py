@@ -171,12 +171,15 @@ class Backend:
         try:
             data = account.private_emails() if connected_before else None
             if data is None:
-                account.sign_in(self.apple_id, self.password)
+                account.start_fresh()
+                # Only send a verification code to the user's devices when they clicked Connect,
+                # never on a background refresh at start-up.
+                account.sign_in(self.apple_id, self.password, request_code=bool(req.get("connect")))
                 data = account.private_emails()
                 if data is None:
                     raise AccountError("Apple opened the session but didn't return the list.")
         except CodeRequired:
-            return {"state": "code"}
+            return {"state": "code" if req.get("connect") else "not_connected"}
         except AccountError as exc:
             raise HelperError(str(exc)) from exc
         return self._account_result(data)
